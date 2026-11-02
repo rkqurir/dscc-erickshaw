@@ -76,8 +76,9 @@ export const ROLES: { code: string; nameBn: string; nameEn: string; permissions:
   },
   {
     code: 'APPEAL_AUTHORITY',
-    nameBn: 'আপিল কর্তৃপক্ষ (ঊর্ধ্বতন)',
-    nameEn: 'Appeal authority (higher officer)',
+    // Rule 4(7) appeal authority: DSCC itself (confirmed by Ripon, 2026-11-02).
+    nameBn: 'আপিল কর্তৃপক্ষ (ঢাকা দক্ষিণ সিটি কর্পোরেশন)',
+    nameEn: 'Appeal authority (Dhaka South City Corporation)',
     permissions: ['application.read', 'appeal.read', 'appeal.decide', 'zone.read'],
   },
   {

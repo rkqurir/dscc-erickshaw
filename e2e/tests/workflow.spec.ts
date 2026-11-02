@@ -166,7 +166,8 @@ test.describe.serial('Phase 2 workflow: verification, inspection, payment, decis
     expect(body).not.toContain('জাহিদ হাসান');
     expect(body).not.toMatch(/018\d{8}/);
     // A tampered token is reported as forged.
-    const tampered = href!.replace(/.$/, (c) => (c === 'A' ? 'E' : 'A'));
+    // Flip a data bit in the last signature character (A/Q/g/w are the only canonical endings).
+    const tampered = href!.replace(/.$/, (c) => (c === 'A' ? 'Q' : 'A'));
     await anon.goto(`${PORTAL}${tampered}`);
     await expect(anon.getByTestId('verify-result')).toContainText('জাল বা ত্রুটিপূর্ণ QR কোড');
     await anon.context().close();

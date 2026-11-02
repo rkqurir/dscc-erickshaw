@@ -124,6 +124,7 @@ describe('QR token format', () => {
     expect(parseQrToken(`${msg}.short`)).toBeNull();
     // Non-canonical base64url (non-zero padding bits) would decode to the same bytes, so it is refused.
     expect(parseQrToken(`${msg}.${'x'.repeat(85)}x`)).toBeNull();
+    expect(parseQrToken(`${msg}.${'x'.repeat(85)}E`)).toBeNull();
     expect(parseQrToken(`Q1.DSCC.${'A'.repeat(21)}B.1.${sig}`)).toBeNull();
     expect(parseQrToken(`Q1.DSCC.01712345678.1.${sig}`)).toBeNull();
     expect(() => qrSignedMessage('DSCC', 'bad', 1)).toThrow();
