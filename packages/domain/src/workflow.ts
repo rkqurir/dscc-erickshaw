@@ -118,7 +118,7 @@ export function inspectionPassed(checklist: Record<FitnessItem, 'PASS' | 'FAIL'>
 
 /**
  * The gazette leaves fitness validity blank ("valid until …"), so it is a policy value.
- * Default one year; DSCC must confirm.
+ * DSCC confirmed one year (Ripon, 2026-11-02).
  */
 export const DEFAULT_FITNESS_VALIDITY_MONTHS = 12;
 

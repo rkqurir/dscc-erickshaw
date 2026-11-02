@@ -60,7 +60,7 @@ Phase 2 settings in `services/api/.env`:
 | `PAYMENT_WEBHOOK_SECRET` | HMAC key the gateway signs callbacks with (`POST /api/v1/payments/webhook/simulator`) |
 | `QR_SIGNING_KEY` | Ed25519 seed for QR tokens; the public key is at `GET /api/v1/public/qr-key` |
 | `PUBLIC_VERIFY_BASE_URL` | Base of the URL printed in the QR (`<base>/v/<token>`) |
-| `FITNESS_VALIDITY_MONTHS` | Fitness certificate validity (gazette leaves it blank; default 12, DSCC to confirm) |
+| `FITNESS_VALIDITY_MONTHS` | Fitness certificate validity in months (gazette leaves it blank; DSCC confirmed 12) |
 | `MAINTENANCE_POLL_MS` | How often expired appeal windows are finalised |
 
 ## Tests
