@@ -1,30 +1,6 @@
 import AxeBuilder from '@axe-core/playwright';
-import { Page, expect, test } from '@playwright/test';
-import { E2E } from '../playwright.config';
-import { ADMIN, PORTAL, acceptConsent, citizenLogin, registerOwnerViaApi, submitApplicationViaApi, totp } from './helpers';
-
-const secrets = new Map<string, string>();
-
-async function staffLogin(page: Page, email: string): Promise<void> {
-  await page.goto(`${ADMIN}/login`);
-  await page.getByLabel('দাফতরিক ইমেইল').fill(email);
-  await page.getByLabel('পাসওয়ার্ড').fill(E2E.staffPassword);
-  await page.getByRole('button', { name: 'লগইন' }).click();
-  const enroll = page.getByRole('heading', { name: 'দ্বি-স্তর যাচাই চালু করুন' });
-  const mfa = page.getByRole('heading', { name: 'দ্বি-স্তর যাচাই', exact: true });
-  await expect(enroll.or(mfa)).toBeVisible();
-  if (await enroll.isVisible()) {
-    await expect(page.getByRole('img', { name: 'TOTP QR' })).toBeVisible();
-    const text = await page.getByTestId('totp-secret').innerText();
-    const secret = /([A-Z2-7]{32})/.exec(text)![1];
-    secrets.set(email, secret);
-    await page.getByLabel('যাচাই কোড').fill(totp(secret));
-  } else {
-    // Next 30-second step avoids reusing the code consumed at enrolment.
-    await page.getByLabel('যাচাই কোড').fill(totp(secrets.get(email)!, Date.now() + 30_000));
-  }
-  await page.getByRole('button', { name: 'যাচাই করুন' }).click();
-}
+import { expect, test } from '@playwright/test';
+import { ADMIN, PORTAL, acceptConsent, citizenLogin, registerOwnerViaApi, staffLogin, submitApplicationViaApi } from './helpers';
 
 test.describe.serial('DSCC admin dashboard', () => {
   let applicationNumber = '';
@@ -48,7 +24,7 @@ test.describe.serial('DSCC admin dashboard', () => {
 
     await staffLogin(page, 'intake@dscc.test');
     await expect(page.getByRole('heading', { name: 'আবেদন ক্যু' })).toBeVisible();
-    await expect(page.getByText('এই ধাপে ক্যু শুধু দেখার জন্য।')).toBeVisible();
+    await expect(page.getByText('আবেদন খুলে যাচাই, সংশোধন, পরিদর্শন ও সিদ্ধান্তের কাজ করুন।', { exact: false })).toBeVisible();
     // Intake officers cannot manage zones, but can view them.
     await expect(page.getByRole('link', { name: 'জোন কনফিগারেশন' })).toBeVisible();
     await page.getByLabel('আবেদন নম্বর').fill(applicationNumber);

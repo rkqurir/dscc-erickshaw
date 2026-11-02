@@ -66,7 +66,9 @@ export function qrSignedMessage(cityCode: string, tokenId: string, version: numb
 
 export function parseQrToken(token: string): { cityCode: string; tokenId: string; version: number; message: string; signature: string } | null {
   if (typeof token !== 'string' || token.length > 200) return null;
-  const m = /^(Q1)\.([A-Z]{2,8})\.([A-Za-z0-9_-]{22})\.([1-9]\d{0,2})\.([A-Za-z0-9_-]{86})$/.exec(token);
+  // Base64url must be canonical: the unused low bits of the last character are zero (16-byte id → 4 bits,
+  // 64-byte signature → 2 bits). Otherwise several strings would decode to the same bytes and verify.
+  const m = /^(Q1)\.([A-Z]{2,8})\.([A-Za-z0-9_-]{21}[AQgw])\.([1-9]\d{0,2})\.([A-Za-z0-9_-]{85}[AEIMQUYcgkosw048])$/.exec(token);
   if (!m) return null;
   return { cityCode: m[2], tokenId: m[3], version: Number(m[4]), message: `${m[1]}.${m[2]}.${m[3]}.${m[4]}`, signature: m[5] };
 }

@@ -1,4 +1,5 @@
 import { APIRequestContext, Page, expect } from '@playwright/test';
+import { E2E } from '../playwright.config';
 import { createHmac, randomInt } from 'node:crypto';
 
 export const PORTAL = 'http://127.0.0.1:3000';
@@ -86,6 +87,10 @@ export const REQUIRED_DOCS = [
 
 /** Create and submit a complete application through the API with the page's session. */
 export async function submitApplicationViaApi(page: Page): Promise<string> {
+  return (await createSubmittedApplication(page)).applicationNumber;
+}
+
+export async function createSubmittedApplication(page: Page): Promise<{ id: string; applicationNumber: string }> {
   const req = page.request;
   const [zones, models] = await Promise.all([
     req.get(`${PORTAL}/api/v1/catalog/zones`).then((r) => r.json()),
@@ -119,7 +124,7 @@ export async function submitApplicationViaApi(page: Page): Promise<string> {
   }
   const s = await req.post(`${PORTAL}/api/v1/applications/${d.id}/submit`, { headers: CSRF });
   expect(s.status()).toBe(200);
-  return (await s.json()).applicationNumber;
+  return { id: d.id, applicationNumber: (await s.json()).applicationNumber };
 }
 
 /** RFC 6238 TOTP for the officer login flow. */
@@ -142,4 +147,44 @@ export function totp(secretB32: string, at = Date.now()): string {
   const off = h[h.length - 1] & 15;
   const bin = ((h[off] & 0x7f) << 24) | (h[off + 1] << 16) | (h[off + 2] << 8) | h[off + 3];
   return String(bin % 1e6).padStart(6, '0');
+}
+
+const staffSecrets = new Map<string, string>();
+const lastStep = new Map<string, number>();
+
+/**
+ * A TOTP code for a time step the officer has not used yet. The API accepts each step once (login and
+ * step-up share the counter) and allows ±1 step of clock drift, so wait for the clock if needed.
+ */
+export async function freshTotp(email: string): Promise<string> {
+  const secret = staffSecrets.get(email);
+  if (!secret) throw new Error(`no TOTP secret for ${email}`);
+  for (;;) {
+    const now = Math.floor(Date.now() / 30_000);
+    const step = Math.max(now, (lastStep.get(email) ?? -1) + 1);
+    if (step <= now + 1) {
+      lastStep.set(email, step);
+      return totp(secret, step * 30_000);
+    }
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+}
+
+/** Officer login with password and TOTP (enrolling on first login). */
+export async function staffLogin(page: Page, email: string): Promise<void> {
+  await page.goto(`${ADMIN}/login`);
+  await page.getByLabel('দাফতরিক ইমেইল').fill(email);
+  await page.getByLabel('পাসওয়ার্ড').fill(E2E.staffPassword);
+  await page.getByRole('button', { name: 'লগইন' }).click();
+  const enroll = page.getByRole('heading', { name: 'দ্বি-স্তর যাচাই চালু করুন' });
+  const mfa = page.getByRole('heading', { name: 'দ্বি-স্তর যাচাই', exact: true });
+  await expect(enroll.or(mfa)).toBeVisible();
+  if (await enroll.isVisible()) {
+    await expect(page.getByRole('img', { name: 'TOTP QR' })).toBeVisible();
+    const text = await page.getByTestId('totp-secret').innerText();
+    staffSecrets.set(email, /([A-Z2-7]{32})/.exec(text)![1]);
+  }
+  await page.getByLabel('যাচাই কোড').fill(await freshTotp(email));
+  await page.getByRole('button', { name: 'যাচাই করুন' }).click();
+  await expect(page.getByRole('button', { name: 'লগআউট' })).toBeVisible();
 }

@@ -119,9 +119,12 @@ describe('QR token format', () => {
     const id = 'AAAAAAAAAAAAAAAAAAAAAA';
     const msg = qrSignedMessage('DSCC', id, 1);
     expect(msg).toBe(`Q1.DSCC.${id}.1`);
-    const sig = 'x'.repeat(86);
+    const sig = `${'x'.repeat(85)}w`;
     expect(parseQrToken(`${msg}.${sig}`)).toMatchObject({ cityCode: 'DSCC', tokenId: id, version: 1, message: msg });
     expect(parseQrToken(`${msg}.short`)).toBeNull();
+    // Non-canonical base64url (non-zero padding bits) would decode to the same bytes, so it is refused.
+    expect(parseQrToken(`${msg}.${'x'.repeat(85)}x`)).toBeNull();
+    expect(parseQrToken(`Q1.DSCC.${'A'.repeat(21)}B.1.${sig}`)).toBeNull();
     expect(parseQrToken(`Q1.DSCC.01712345678.1.${sig}`)).toBeNull();
     expect(() => qrSignedMessage('DSCC', 'bad', 1)).toThrow();
   });

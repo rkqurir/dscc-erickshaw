@@ -84,6 +84,7 @@ export function ApplicationWizard({ initial, onSubmitted }: { initial: Applicati
   const idemKey = useRef(newIdempotencyKey());
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const saving = useRef<Promise<void> | null>(null);
+  const correction = initial.status === 'CORRECTION_REQUESTED' ? initial.correction : null;
 
   useEffect(() => {
     void Promise.all([api<Zone[]>('/catalog/zones'), api<Manufacturer[]>('/catalog/models')])
@@ -279,6 +280,17 @@ export function ApplicationWizard({ initial, onSubmitted }: { initial: Applicati
           </li>
         ))}
       </ol>
+      {correction && (
+        <div className="alert alert-warning" role="note" data-testid="correction-notice">
+          <strong>{t('cit.correctionTitle')}</strong>
+          <p style={{ margin: '0.25rem 0' }}>{correction.message}</p>
+          <p className="small" style={{ margin: 0 }}>
+            {t('cit.correctionItems', {
+              items: correction.items.map((i) => (['vehicle', 'location', 'driver'].includes(i) ? tk(`section.${i}`) : tk(`doc.${i}`))).join(', '),
+            })}
+          </p>
+        </div>
+      )}
       <ErrorAlert error={error} />
 
       <div className="card">
@@ -473,7 +485,7 @@ export function ApplicationWizard({ initial, onSubmitted }: { initial: Applicati
             </label>
             {errFor('declaration.truthful') && <p className="field-error">{tk(`field.${errFor('declaration.truthful')}`)}</p>}
             <button className="btn btn-block" type="button" onClick={submit} disabled={submitting}>
-              {submitting ? t('review.submitting') : t('review.submit')}
+              {submitting ? t('review.submitting') : correction ? t('cit.resubmit') : t('review.submit')}
             </button>
           </>
         )}
@@ -499,9 +511,11 @@ export function ApplicationWizard({ initial, onSubmitted }: { initial: Applicati
             </button>
           )}
         </div>
-        <button type="button" className="btn btn-ghost" onClick={deleteDraft}>
-          {t('app.form.deleteDraft')}
-        </button>
+        {!correction && (
+          <button type="button" className="btn btn-ghost" onClick={deleteDraft}>
+            {t('app.form.deleteDraft')}
+          </button>
+        )}
       </div>
     </>
   );
