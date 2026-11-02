@@ -1,0 +1,13 @@
+packages:
+  - packages/*
+  - services/*
+  - apps/*
+  - e2e
+onlyBuiltDependencies:
+  - prisma
+  - "@prisma/client"
+  - "@prisma/engines"
+  - esbuild
+  - sharp
+  - "@nestjs/core"
+  - "@swc/core"

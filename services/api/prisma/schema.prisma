@@ -1,0 +1,532 @@
+// DSCC E-Rickshaw Management System — Phase 1 schema.
+// Constraints Prisma cannot express (partial unique indexes, RLS, triggers, append-only audit)
+// live in prisma/migrations/*_security/migration.sql.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ───────────── City & geography ─────────────
+
+model City {
+  id             String   @id @default(uuid(7)) @db.Uuid
+  code           String   @unique // e.g. DSCC
+  nameBn         String   @map("name_bn")
+  nameEn         String   @map("name_en")
+  plateCityNameBn String  @map("plate_city_name_bn") // printed on plates, e.g. "ঢাকা দক্ষিণ"
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  zones Zone[]
+  wards Ward[]
+
+  @@map("cities")
+}
+
+model Zone {
+  id                    String   @id @default(uuid(7)) @db.Uuid
+  cityId                String   @map("city_id") @db.Uuid
+  code                  String // Z1..Z4
+  nameBn                String   @map("name_bn")
+  nameEn                String   @map("name_en")
+  uiColour              String   @map("ui_colour")
+  plateBackgroundColour String   @map("plate_background_colour")
+  plateAreaCodeBn       String   @map("plate_area_code_bn")
+  vehicleQuota          Int?     @map("vehicle_quota") // Rule 3: zone-wise vehicle count, set by DSCC
+  boundaryGeojson       Json?    @map("boundary_geojson")
+  approvalStatus        String   @default("DRAFT") @map("approval_status") // DRAFT | PROPOSED | APPROVED
+  version               Int      @default(1)
+  updatedAt             DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  updatedByStaffId      String?  @map("updated_by_staff_id") @db.Uuid
+
+  city     City          @relation(fields: [cityId], references: [id])
+  wards    Ward[]
+  versions ZoneVersion[]
+
+  @@unique([cityId, code])
+  @@unique([cityId, plateAreaCodeBn])
+  @@map("zones")
+}
+
+model ZoneVersion {
+  id         String   @id @default(uuid(7)) @db.Uuid
+  zoneId     String   @map("zone_id") @db.Uuid
+  cityId     String   @map("city_id") @db.Uuid
+  version    Int
+  snapshot   Json
+  changeNote String   @map("change_note")
+  changedBy  String?  @map("changed_by_staff_id") @db.Uuid
+  changedAt  DateTime @default(now()) @map("changed_at") @db.Timestamptz(3)
+
+  zone Zone @relation(fields: [zoneId], references: [id])
+
+  @@unique([zoneId, version])
+  @@map("zone_versions")
+}
+
+model Ward {
+  id       String  @id @default(uuid(7)) @db.Uuid
+  cityId   String  @map("city_id") @db.Uuid
+  zoneId   String  @map("zone_id") @db.Uuid
+  number   Int
+  nameBn   String  @map("name_bn")
+  nameEn   String  @map("name_en")
+  isSample Boolean @default(true) @map("is_sample") // true until DSCC supplies the official ward→zone list
+
+  city City @relation(fields: [cityId], references: [id])
+  zone Zone @relation(fields: [zoneId], references: [id])
+
+  @@unique([cityId, number])
+  @@map("wards")
+}
+
+model WorkingDayHoliday {
+  date   DateTime @id @db.Date
+  nameBn String   @map("name_bn")
+
+  @@map("working_day_holidays")
+}
+
+// ───────────── Identity & access ─────────────
+
+model User {
+  id          String    @id @default(uuid(7)) @db.Uuid
+  phoneE164   String    @unique @map("phone_e164")
+  status      String    @default("ACTIVE")
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  lastLoginAt DateTime? @map("last_login_at") @db.Timestamptz(3)
+
+  consents     Consent[]
+  ownerAccount OwnerAccount?
+
+  @@map("users")
+}
+
+model OtpChallenge {
+  id         String    @id @default(uuid(7)) @db.Uuid
+  phoneE164  String    @map("phone_e164")
+  codeHash   String    @map("code_hash")
+  purpose    String    @default("LOGIN")
+  ip         String?
+  attempts   Int       @default(0)
+  expiresAt  DateTime  @map("expires_at") @db.Timestamptz(3)
+  consumedAt DateTime? @map("consumed_at") @db.Timestamptz(3)
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([phoneE164, createdAt])
+  @@index([ip, createdAt])
+  @@map("otp_challenges")
+}
+
+model AuthSession {
+  id          String    @id @default(uuid(7)) @db.Uuid
+  tokenHash   String    @unique @map("token_hash")
+  subjectType String    @map("subject_type") // USER | STAFF
+  userId      String?   @map("user_id") @db.Uuid
+  staffId     String?   @map("staff_id") @db.Uuid
+  mfaVerified Boolean   @default(false) @map("mfa_verified")
+  ip          String?
+  userAgent   String?   @map("user_agent")
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  lastSeenAt  DateTime  @default(now()) @map("last_seen_at") @db.Timestamptz(3)
+  expiresAt   DateTime  @map("expires_at") @db.Timestamptz(3)
+  revokedAt   DateTime? @map("revoked_at") @db.Timestamptz(3)
+
+  @@map("auth_sessions")
+}
+
+model Consent {
+  id            String   @id @default(uuid(7)) @db.Uuid
+  userId        String   @map("user_id") @db.Uuid
+  noticeVersion String   @map("notice_version")
+  ip            String?
+  acceptedAt    DateTime @default(now()) @map("accepted_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@unique([userId, noticeVersion])
+  @@map("consents")
+}
+
+model StaffAccount {
+  id             String    @id @default(uuid(7)) @db.Uuid
+  cityId         String    @map("city_id") @db.Uuid
+  email          String    @unique
+  fullName       String    @map("full_name")
+  passwordHash   String    @map("password_hash")
+  totpSecretEnc  String?   @map("totp_secret_enc")
+  mfaEnrolledAt  DateTime? @map("mfa_enrolled_at") @db.Timestamptz(3)
+  lastTotpStep   BigInt?   @map("last_totp_step") // replay protection
+  failedAttempts Int       @default(0) @map("failed_attempts")
+  lockedUntil    DateTime? @map("locked_until") @db.Timestamptz(3)
+  status         String    @default("ACTIVE")
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  roleAssignments RoleAssignment[]
+
+  @@map("staff_accounts")
+}
+
+model Role {
+  code   String @id
+  nameBn String @map("name_bn")
+  nameEn String @map("name_en")
+
+  permissions RolePermission[]
+  assignments RoleAssignment[]
+
+  @@map("roles")
+}
+
+model Permission {
+  code        String @id
+  description String
+
+  roles RolePermission[]
+
+  @@map("permissions")
+}
+
+model RolePermission {
+  roleCode       String @map("role_code")
+  permissionCode String @map("permission_code")
+
+  role       Role       @relation(fields: [roleCode], references: [code])
+  permission Permission @relation(fields: [permissionCode], references: [code])
+
+  @@id([roleCode, permissionCode])
+  @@map("role_permissions")
+}
+
+model RoleAssignment {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  staffId   String   @map("staff_id") @db.Uuid
+  roleCode  String   @map("role_code")
+  cityId    String   @map("city_id") @db.Uuid
+  zoneId    String?  @map("zone_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  staff StaffAccount @relation(fields: [staffId], references: [id])
+  role  Role         @relation(fields: [roleCode], references: [code])
+
+  @@unique([staffId, roleCode, cityId])
+  @@map("role_assignments")
+}
+
+// ───────────── Owners & drivers ─────────────
+
+// National (not city-scoped): the five-vehicle limit applies across all city corporations.
+model OwnerIdentity {
+  id                 String    @id @default(uuid(7)) @db.Uuid
+  nidHmac            String    @unique @map("nid_hmac")
+  nidEncrypted       String    @map("nid_encrypted")
+  nidLast4           String    @map("nid_last4")
+  nidKind            String    @map("nid_kind")
+  dateOfBirth        DateTime  @map("date_of_birth") @db.Date
+  nameBn             String    @map("name_bn")
+  nameEn             String?   @map("name_en")
+  fatherNameBn       String    @map("father_name_bn")
+  motherNameBn       String    @map("mother_name_bn")
+  presentAddress     String    @map("present_address")
+  permanentAddress   String    @map("permanent_address")
+  education          String
+  verificationStatus String    @map("verification_status") // PENDING_MANUAL | SIMULATED_VERIFIED | VERIFIED | FAILED
+  verificationSource String    @map("verification_source")
+  verifiedAt         DateTime? @map("verified_at") @db.Timestamptz(3)
+  createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  accounts              OwnerAccount[]
+  externalRegistrations ExternalCityRegistration[]
+
+  @@map("owner_identities")
+}
+
+model OwnerAccount {
+  userId          String   @id @map("user_id") @db.Uuid
+  ownerIdentityId String   @map("owner_identity_id") @db.Uuid
+  linkedAt        DateTime @default(now()) @map("linked_at") @db.Timestamptz(3)
+
+  user          User          @relation(fields: [userId], references: [id])
+  ownerIdentity OwnerIdentity @relation(fields: [ownerIdentityId], references: [id])
+
+  @@index([ownerIdentityId])
+  @@map("owner_accounts")
+}
+
+// Vehicles the owner declares as registered with another city corporation; counted toward Rule 4(8).
+model ExternalCityRegistration {
+  id              String   @id @default(uuid(7)) @db.Uuid
+  ownerIdentityId String   @map("owner_identity_id") @db.Uuid
+  cityName        String   @map("city_name")
+  registrationNo  String   @map("registration_no")
+  status          String   @default("DECLARED") // DECLARED | VERIFIED | REJECTED
+  declaredByUser  String   @map("declared_by_user_id") @db.Uuid
+  declaredAt      DateTime @default(now()) @map("declared_at") @db.Timestamptz(3)
+
+  ownerIdentity OwnerIdentity @relation(fields: [ownerIdentityId], references: [id])
+
+  @@unique([ownerIdentityId, cityName, registrationNo])
+  @@map("external_city_registrations")
+}
+
+model Driver {
+  id                    String   @id @default(uuid(7)) @db.Uuid
+  cityId                String   @map("city_id") @db.Uuid
+  nidHmac               String   @map("nid_hmac")
+  nidEncrypted          String   @map("nid_encrypted")
+  nidLast4              String   @map("nid_last4")
+  nameBn                String   @map("name_bn")
+  nameEn                String?  @map("name_en")
+  dateOfBirth           DateTime @map("date_of_birth") @db.Date
+  phoneE164             String   @map("phone_e164")
+  address               String
+  trainingCertificateNo String?  @map("training_certificate_no")
+  createdAt             DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([cityId, nidHmac])
+  @@map("drivers")
+}
+
+// ───────────── Vehicles ─────────────
+
+model Manufacturer {
+  id       String  @id @default(uuid(7)) @db.Uuid
+  nameBn   String  @map("name_bn")
+  nameEn   String  @map("name_en")
+  isSample Boolean @default(true) @map("is_sample")
+
+  models ApprovedModel[]
+
+  @@map("manufacturers")
+}
+
+model ApprovedModel {
+  id             String  @id @default(uuid(7)) @db.Uuid
+  manufacturerId String  @map("manufacturer_id") @db.Uuid
+  name           String
+  seatType       String  @map("seat_type") // TWO_SEAT | FOUR_SEAT
+  isActive       Boolean @default(true) @map("is_active")
+  isSample       Boolean @default(true) @map("is_sample")
+
+  manufacturer Manufacturer @relation(fields: [manufacturerId], references: [id])
+
+  @@map("approved_models")
+}
+
+model Vehicle {
+  id                String   @id @default(uuid(7)) @db.Uuid
+  cityId            String   @map("city_id") @db.Uuid
+  ownerIdentityId   String   @map("owner_identity_id") @db.Uuid
+  modelId           String   @map("model_id") @db.Uuid
+  seatType          String   @map("seat_type")
+  chassisNo         String   @map("chassis_no")
+  motorNo           String   @map("motor_no")
+  manufactureYear   Int      @map("manufacture_year")
+  batteryType       String   @map("battery_type")
+  hasSpeedometer    Boolean  @map("has_speedometer")
+  insurancePolicyNo String?  @map("insurance_policy_no")
+  colour            String?
+  zoneId            String   @map("zone_id") @db.Uuid
+  wardId            String   @map("ward_id") @db.Uuid
+  chargingLocation  String   @map("charging_location")
+  status            String // PENDING_APPROVAL | ACTIVE | SUSPENDED | EXPIRED | CANCELLED | WITHDRAWN | REJECTED
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([ownerIdentityId])
+  @@map("vehicles")
+}
+
+model VehicleDriverAssignment {
+  id        String    @id @default(uuid(7)) @db.Uuid
+  cityId    String    @map("city_id") @db.Uuid
+  vehicleId String    @map("vehicle_id") @db.Uuid
+  driverId  String    @map("driver_id") @db.Uuid
+  validFrom DateTime  @default(now()) @map("valid_from") @db.Timestamptz(3)
+  validTo   DateTime? @map("valid_to") @db.Timestamptz(3)
+
+  @@index([vehicleId])
+  @@map("vehicle_driver_assignments")
+}
+
+// Rule 4(8) enforcement. Every path that adds a vehicle to an owner goes through QuotaService.reserve().
+model VehicleQuotaSlot {
+  id              String    @id @default(uuid(7)) @db.Uuid
+  ownerIdentityId String    @map("owner_identity_id") @db.Uuid
+  vehicleId       String    @map("vehicle_id") @db.Uuid
+  cityId          String    @map("city_id") @db.Uuid
+  state           String // RESERVED | HELD | RELEASED
+  source          String // APPLICATION_SUBMIT | ...
+  releaseReason   String?   @map("release_reason")
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  releasedAt      DateTime? @map("released_at") @db.Timestamptz(3)
+
+  @@index([ownerIdentityId, state])
+  @@map("vehicle_quota_slots")
+}
+
+// ───────────── Applications ─────────────
+
+model Application {
+  id                String    @id @default(uuid(7)) @db.Uuid
+  cityId            String    @map("city_id") @db.Uuid
+  applicantUserId   String    @map("applicant_user_id") @db.Uuid
+  ownerIdentityId   String    @map("owner_identity_id") @db.Uuid
+  type              String    @default("NEW_REGISTRATION")
+  status            String    @default("DRAFT")
+  applicationNumber String?   @unique @map("application_number")
+  formData          Json      @default("{}") @map("form_data")
+  vehicleId         String?   @map("vehicle_id") @db.Uuid
+  zoneId            String?   @map("zone_id") @db.Uuid
+  wardId            String?   @map("ward_id") @db.Uuid
+  version           Int       @default(1)
+  submittedAt       DateTime? @map("submitted_at") @db.Timestamptz(3)
+  decisionDueDate   DateTime? @map("decision_due_date") @db.Date
+  withdrawnAt       DateTime? @map("withdrawn_at") @db.Timestamptz(3)
+  deletedAt         DateTime? @map("deleted_at") @db.Timestamptz(3) // drafts only (soft delete)
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  documents    ApplicationDocument[]
+  revisions    ApplicationRevision[]
+  statusEvents ApplicationStatusEvent[]
+
+  @@index([cityId, status, submittedAt])
+  @@index([applicantUserId])
+  @@map("applications")
+}
+
+model ApplicationCounter {
+  cityId    String @map("city_id") @db.Uuid
+  year      Int
+  lastValue Int    @default(0) @map("last_value")
+
+  @@id([cityId, year])
+  @@map("application_counters")
+}
+
+model ApplicationRevision {
+  id            String   @id @default(uuid(7)) @db.Uuid
+  applicationId String   @map("application_id") @db.Uuid
+  cityId        String   @map("city_id") @db.Uuid
+  revisionNo    Int      @map("revision_no")
+  snapshot      Json
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  application Application @relation(fields: [applicationId], references: [id])
+
+  @@unique([applicationId, revisionNo])
+  @@map("application_revisions")
+}
+
+model ApplicationStatusEvent {
+  id            String   @id @default(uuid(7)) @db.Uuid
+  applicationId String   @map("application_id") @db.Uuid
+  cityId        String   @map("city_id") @db.Uuid
+  fromStatus    String?  @map("from_status")
+  toStatus      String   @map("to_status")
+  actorType     String   @map("actor_type") // USER | STAFF | SYSTEM
+  actorId       String?  @map("actor_id") @db.Uuid
+  note          String?
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  application Application @relation(fields: [applicationId], references: [id])
+
+  @@index([applicationId, createdAt])
+  @@map("application_status_events")
+}
+
+model ApplicationDocument {
+  id            String    @id @default(uuid(7)) @db.Uuid
+  applicationId String    @map("application_id") @db.Uuid
+  cityId        String    @map("city_id") @db.Uuid
+  docType       String    @map("doc_type")
+  fileId        String    @map("file_id") @db.Uuid
+  uploadedAt    DateTime  @default(now()) @map("uploaded_at") @db.Timestamptz(3)
+  supersededAt  DateTime? @map("superseded_at") @db.Timestamptz(3)
+
+  application Application @relation(fields: [applicationId], references: [id])
+  file        StoredFile  @relation(fields: [fileId], references: [id])
+
+  @@index([applicationId, docType])
+  @@map("application_documents")
+}
+
+model StoredFile {
+  id           String   @id @default(uuid(7)) @db.Uuid
+  cityId       String   @map("city_id") @db.Uuid
+  ownerUserId  String   @map("owner_user_id") @db.Uuid
+  storageKey   String   @unique @map("storage_key")
+  mimeType     String   @map("mime_type")
+  sizeBytes    Int      @map("size_bytes")
+  sha256       String
+  originalName String   @map("original_name")
+  scanStatus   String   @map("scan_status") // CLEAN | INFECTED
+  scanEngine   String   @map("scan_engine")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  documents ApplicationDocument[]
+
+  @@map("files")
+}
+
+// ───────────── Platform ─────────────
+
+model AuditEvent {
+  id         BigInt   @id @default(autoincrement())
+  occurredAt DateTime @default(now()) @map("occurred_at") @db.Timestamptz(3)
+  cityId     String?  @map("city_id") @db.Uuid
+  actorType  String   @map("actor_type")
+  actorId    String?  @map("actor_id") @db.Uuid
+  action     String
+  entityType String   @map("entity_type")
+  entityId   String?  @map("entity_id")
+  data       Json     @default("{}")
+  ip         String?
+  prevHash   String   @map("prev_hash")
+  hash       String   @unique
+
+  @@index([entityType, entityId])
+  @@map("audit_events")
+}
+
+model OutboxEvent {
+  id          String    @id @default(uuid(7)) @db.Uuid
+  topic       String
+  payload     Json
+  status      String    @default("PENDING") // PENDING | DONE | FAILED
+  attempts    Int       @default(0)
+  availableAt DateTime  @default(now()) @map("available_at") @db.Timestamptz(3)
+  lastError   String?   @map("last_error")
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  processedAt DateTime? @map("processed_at") @db.Timestamptz(3)
+
+  @@index([status, availableAt])
+  @@map("outbox_events")
+}
+
+// Development/test SMS sink used by the simulator adapter. Never used when a real gateway is configured.
+model SimulatedSms {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  toPhone   String   @map("to_phone")
+  body      String
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([toPhone, createdAt])
+  @@map("sim_sms_messages")
+}
+
+model IdempotencyKey {
+  key           String
+  scope         String // e.g. user:<id>
+  requestHash   String   @map("request_hash")
+  statusCode    Int      @map("status_code")
+  response      Json
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@id([scope, key])
+  @@map("idempotency_keys")
+}
