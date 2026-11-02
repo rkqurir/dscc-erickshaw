@@ -1,6 +1,8 @@
 # Requirements traceability — Phase 1
 
 Source: S.R.O. 384-Law/2026 (ই-রিকশা নিবন্ধন ও চলাচল বিধিমালা, gazette 29 Oct 2026) and the approved Phase 0 report.
+Rule numbers 4(8), 9, 19 and Schedules 2–3 were checked against the gazette in Phase 0; the other rule numbers below are to be re-verified against the gazette text before Gate C.
+
 "API test" = `services/api/test/*.test.ts`, "E2E" = `e2e/tests/*.spec.ts`, "Unit" = `packages/*/test` and `services/api/test/unit.test.ts`.
 
 | Requirement | Source | Code | Tests |
