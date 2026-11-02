@@ -10,3 +10,4 @@ test-results/
 playwright-report/
 next-env.d.ts
 storage-test/
+e2e/.storage/

@@ -1,0 +1,13 @@
+# Local development database only. Not a deployment definition.
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: postgres-local-only
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - dscc-pg:/var/lib/postgresql/data
+volumes:
+  dscc-pg:

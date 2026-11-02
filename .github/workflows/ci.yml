@@ -1,0 +1,46 @@
+# Continuous integration: typecheck, unit/integration tests, builds and end-to-end tests.
+# There is deliberately no deploy job; deployment needs explicit DSCC approval (Gate E).
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres-ci-only
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      PGPASSWORD: postgres-ci-only
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Create database roles
+        run: psql -h localhost -U postgres -f infra/postgres/init.sql
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @dscc/api run prisma:generate
+      - run: pnpm run build:packages
+      - run: pnpm run typecheck
+      - run: pnpm test
+      - run: pnpm run build
+      - name: Install Playwright browser
+        run: pnpm --filter @dscc/e2e exec playwright install --with-deps chromium
+      - run: pnpm test:e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-traces
+          path: e2e/test-results
