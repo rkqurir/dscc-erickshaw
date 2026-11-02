@@ -9,6 +9,10 @@ import { useStaffSession } from './session';
 /** Menu entries appear only for modules that exist and that the officer is permitted to use. */
 const MENU = [
   { href: '/applications', key: 'nav.applications', permission: 'application.read' },
+  { href: '/inspections', key: 'nav.inspections', permission: 'inspection.read' },
+  { href: '/payments', key: 'nav.payments', permission: 'payment.read' },
+  { href: '/registrations', key: 'nav.registrations', permission: 'registration.read' },
+  { href: '/appeals', key: 'nav.appeals', permission: 'appeal.read' },
   { href: '/zones', key: 'nav.zones', permission: 'zone.read' },
 ] as const;
 

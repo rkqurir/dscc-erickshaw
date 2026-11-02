@@ -3,6 +3,7 @@ import {
   DECISION_DEADLINE_WORKING_DAYS,
   DOCUMENT_TYPE_LIST,
   DocumentType,
+  EDITABLE_APPLICATION_STATUSES,
   REQUIRED_DOCUMENT_TYPES,
   addWorkingDays,
   applicationDraftSchema,
@@ -23,6 +24,10 @@ import { PrismaService, Tx } from '../../platform/prisma.service';
 import { OwnerService } from '../owners/owners';
 import { QuotaService } from '../owners/quota.service';
 import { FilesService, UploadedFileInput } from './files.service';
+import { FeesService } from '../workflow/fees.service';
+import { InspectionService } from '../workflow/inspection.service';
+import { RegistrationService } from '../workflow/registration.service';
+import { dhakaToday, isoDate } from '../workflow/scope';
 
 const MAX_OPEN_DRAFTS = 5;
 
@@ -41,6 +46,8 @@ export class ApplicationsService {
     private readonly files: FilesService,
     private readonly audit: AuditService,
     private readonly outbox: OutboxService,
+    private readonly fees: FeesService,
+    private readonly registrations: RegistrationService,
   ) {}
 
   private async city() {
@@ -108,6 +115,16 @@ export class ApplicationsService {
         orderBy: { uploadedAt: 'asc' },
       });
       const events = await tx.applicationStatusEvent.findMany({ where: { applicationId: app.id }, orderBy: { createdAt: 'asc' } });
+      const [correction, inspections, invoice, decision, appeal, registration] = await Promise.all([
+        tx.correctionRequest.findFirst({ where: { applicationId: app.id }, orderBy: { createdAt: 'desc' } }),
+        tx.fitnessInspection.findMany({ where: { applicationId: app.id, status: { not: 'CANCELLED' } }, orderBy: { createdAt: 'asc' } }),
+        tx.invoice.findFirst({ where: { applicationId: app.id, purpose: 'NEW_REGISTRATION', status: { not: 'CANCELLED' } }, include: { payments: { orderBy: { createdAt: 'asc' } } } }),
+        tx.applicationDecision.findFirst({ where: { applicationId: app.id }, orderBy: { decidedAt: 'desc' } }),
+        tx.appeal.findFirst({ where: { applicationId: app.id }, orderBy: { filedAt: 'desc' } }),
+        this.registrations.registrationFor(tx, city.code, app.id),
+      ]);
+      const appealOpen =
+        app.status === 'REJECTED' && !app.rejectionFinalAt && !!app.appealDeadline && isoDate(app.appealDeadline)! >= dhakaToday() && (!appeal || appeal.decisionId !== decision?.id);
       return {
         id: app.id,
         applicationNumber: app.applicationNumber,
@@ -128,6 +145,15 @@ export class ApplicationsService {
         })),
         timeline: events.map((e) => ({ fromStatus: e.fromStatus, toStatus: e.toStatus, actorType: e.actorType, note: e.note, at: e.createdAt })),
         requiredDocuments: REQUIRED_DOCUMENT_TYPES,
+        correction: correction ? { items: correction.items, message: correction.message, at: correction.createdAt, open: !correction.resolvedAt } : null,
+        inspections: inspections.map(InspectionService.view),
+        invoice: invoice ? FeesService.view(invoice, invoice.payments.filter((p) => p.status === 'SUCCEEDED')) : null,
+        decision: decision ? { decision: decision.decision, reasons: decision.reasonCodes, reasonText: decision.reasonText, at: decision.decidedAt } : null,
+        appealDeadline: isoDate(app.appealDeadline),
+        rejectionFinal: !!app.rejectionFinalAt,
+        canAppeal: appealOpen,
+        appeal: appeal ? { status: appeal.status, grounds: appeal.grounds, filedAt: appeal.filedAt, decidedAt: appeal.decidedAt, decisionNote: appeal.decisionNote } : null,
+        registration,
       };
     });
   }
@@ -139,12 +165,14 @@ export class ApplicationsService {
     const city = await this.city();
     return this.prisma.inCity(city.id, async (tx) => {
       const app = await this.ownApplication(tx, id, userId);
-      if (app.status !== 'DRAFT') throw conflict('APPLICATION_INVALID_STATE');
+      if (!EDITABLE_APPLICATION_STATUSES.has(app.status as ApplicationStatus)) throw conflict('APPLICATION_INVALID_STATE');
       const loc = parsed.location as { zoneId?: unknown; wardId?: unknown } | undefined;
       const uuid = (v: unknown) => (typeof v === 'string' && /^[0-9a-f-]{36}$/i.test(v) ? v : null);
+      // After submission the zone/ward columns describe the submitted vehicle; they change only on resubmit.
+      const locationCols = app.status === 'DRAFT' ? { zoneId: uuid(loc?.zoneId), wardId: uuid(loc?.wardId) } : {};
       const upd = await tx.application.updateMany({
         where: { id: app.id, version },
-        data: { formData: parsed as object, version: { increment: 1 }, zoneId: uuid(loc?.zoneId), wardId: uuid(loc?.wardId) },
+        data: { formData: parsed as object, version: { increment: 1 }, ...locationCols },
       });
       if (upd.count !== 1) throw conflict('CONFLICT');
       return { id: app.id, version: version + 1, savedAt: new Date() };
@@ -166,7 +194,7 @@ export class ApplicationsService {
     const city = await this.city();
     return this.prisma.inCity(city.id, async (tx) => {
       const app = await this.ownApplication(tx, id, actor.userId, true);
-      if (app.status !== 'DRAFT') throw conflict('APPLICATION_INVALID_STATE');
+      if (!EDITABLE_APPLICATION_STATUSES.has(app.status as ApplicationStatus)) throw conflict('APPLICATION_INVALID_STATE');
       const stored = await this.files.store(tx, { cityId: city.id, ownerUserId: actor.userId, file });
       await tx.applicationDocument.updateMany({
         where: { applicationId: app.id, docType, supersededAt: null },
@@ -224,7 +252,8 @@ export class ApplicationsService {
             return prev.response as Record<string, unknown>;
           }
         }
-        const to = nextStatus(app.status as ApplicationStatus, 'SUBMIT');
+        const resubmit = app.status === 'CORRECTION_REQUESTED';
+        const to = nextStatus(app.status as ApplicationStatus, resubmit ? 'RESUBMIT' : 'SUBMIT');
         if (!to) throw conflict('APPLICATION_INVALID_STATE');
 
         const r = applicationSubmitSchema.safeParse(app.formData);
@@ -247,10 +276,20 @@ export class ApplicationsService {
         if (model.seatType !== form.vehicle.seatType) throw badRequest('MODEL_SEAT_MISMATCH');
 
         const live = await tx.vehicle.findFirst({
-          where: { OR: [{ chassisNo: form.vehicle.chassisNo }, { motorNo: form.vehicle.motorNo }], status: { notIn: ['WITHDRAWN', 'REJECTED'] } },
+          where: {
+            OR: [{ chassisNo: form.vehicle.chassisNo }, { motorNo: form.vehicle.motorNo }],
+            status: { notIn: ['WITHDRAWN', 'REJECTED'] },
+            ...(app.vehicleId ? { id: { not: app.vehicleId } } : {}),
+          },
           select: { chassisNo: true },
         });
         if (live) throw conflict(live.chassisNo === form.vehicle.chassisNo ? 'CHASSIS_ALREADY_REGISTERED' : 'MOTOR_ALREADY_REGISTERED');
+
+        if (resubmit) {
+          const response = await this.applyResubmission(tx, { app, form, zoneId: zone.id, wardId: ward.id, modelId: model.id, docs, actor, cityId: city.id });
+          if (idempotencyKey) await tx.idempotencyKey.create({ data: { scope, key: idempotencyKey, requestHash, statusCode: 200, response } });
+          return response;
+        }
 
         const vehicleId = uuidv7();
         await tx.$executeRaw`
@@ -344,6 +383,7 @@ export class ApplicationsService {
           data: { applicationNumber, vehicleId, zone: zone.code },
           ip: actor.ip,
         });
+        await this.fees.ensureInvoice(tx, { cityId: city.id, cityCode: city.code, applicationId: app.id, seatType: form.vehicle.seatType, onDate: dhakaToday() });
         const response = { id: app.id, applicationNumber, status: to, submittedAt: now.toISOString(), decisionDueDate: due };
         if (idempotencyKey) {
           await tx.idempotencyKey.create({ data: { scope, key: idempotencyKey, requestHash, statusCode: 200, response } });
@@ -352,6 +392,105 @@ export class ApplicationsService {
       },
       { timeout: 30_000 },
     );
+  }
+
+  /**
+   * Resubmission after a correction request: same application number and quota slot; the vehicle and
+   * driver records are updated from the corrected form, a new immutable revision is stored and the open
+   * correction request is closed. Verification restarts from SUBMITTED.
+   */
+  private async applyResubmission(
+    tx: Tx,
+    p: {
+      app: Awaited<ReturnType<ApplicationsService['ownApplication']>>;
+      form: ReturnType<typeof applicationSubmitSchema.parse>;
+      zoneId: string;
+      wardId: string;
+      modelId: string;
+      docs: { docType: string; fileId: string; file: { sha256: string } }[];
+      actor: Actor;
+      cityId: string;
+    },
+  ) {
+    const { app, form } = p;
+    if (!app.vehicleId) throw conflict('APPLICATION_INVALID_STATE');
+    await tx.vehicle.update({
+      where: { id: app.vehicleId },
+      data: {
+        modelId: p.modelId,
+        seatType: form.vehicle.seatType,
+        chassisNo: form.vehicle.chassisNo,
+        motorNo: form.vehicle.motorNo,
+        manufactureYear: form.vehicle.manufactureYear,
+        batteryType: form.vehicle.batteryType,
+        hasSpeedometer: form.vehicle.hasSpeedometer,
+        insurancePolicyNo: form.vehicle.insurancePolicyNo ?? null,
+        colour: form.vehicle.colour ?? null,
+        zoneId: p.zoneId,
+        wardId: p.wardId,
+        chargingLocation: form.location.chargingLocation,
+      },
+    });
+    const dn = normalizeNid(form.driver.nid, form.driver.dateOfBirth);
+    if (!dn.ok) throw badRequest('VALIDATION_FAILED', { fields: { 'driver.nid': dn.error } });
+    const now = new Date();
+    await tx.vehicleDriverAssignment.updateMany({ where: { vehicleId: app.vehicleId, validTo: null }, data: { validTo: now } });
+    const driver = await tx.driver.create({
+      data: {
+        cityId: p.cityId,
+        nidHmac: this.owners.nidHmac(dn.value.canonical),
+        nidEncrypted: this.owners.encryptNid(dn.value.digits),
+        nidLast4: dn.value.digits.slice(-4),
+        nameBn: form.driver.nameBn,
+        nameEn: form.driver.nameEn ?? null,
+        dateOfBirth: new Date(`${form.driver.dateOfBirth}T00:00:00Z`),
+        phoneE164: form.driver.phone,
+        address: form.driver.address,
+        trainingCertificateNo: form.driver.trainingCertificateNo ?? null,
+      },
+    });
+    await tx.vehicleDriverAssignment.create({ data: { cityId: p.cityId, vehicleId: app.vehicleId, driverId: driver.id } });
+    await tx.application.update({
+      where: { id: app.id },
+      data: { status: 'SUBMITTED', zoneId: p.zoneId, wardId: p.wardId, formData: form as object, version: { increment: 1 } },
+    });
+    await tx.correctionRequest.updateMany({ where: { applicationId: app.id, resolvedAt: null }, data: { resolvedAt: now } });
+    const revCount = await tx.applicationRevision.count({ where: { applicationId: app.id } });
+    await tx.applicationRevision.create({
+      data: {
+        applicationId: app.id,
+        cityId: p.cityId,
+        revisionNo: revCount + 1,
+        snapshot: {
+          applicationNumber: app.applicationNumber,
+          form: { ...form, driver: { ...form.driver, nid: maskNid(dn.value.digits) } },
+          documents: p.docs.map((d) => ({ docType: d.docType, fileId: d.fileId, sha256: d.file.sha256 })),
+          resubmittedAt: now.toISOString(),
+        },
+      },
+    });
+    await tx.applicationStatusEvent.create({
+      data: { applicationId: app.id, cityId: p.cityId, fromStatus: app.status, toStatus: 'SUBMITTED', actorType: 'USER', actorId: p.actor.userId, note: null },
+    });
+    await this.audit.record(tx, {
+      cityId: p.cityId,
+      actorType: 'USER',
+      actorId: p.actor.userId,
+      action: 'application.resubmitted',
+      entityType: 'application',
+      entityId: app.id,
+      data: { applicationNumber: app.applicationNumber, revisionNo: revCount + 1 },
+      ip: p.actor.ip,
+    });
+    const user = await tx.user.findUniqueOrThrow({ where: { id: p.actor.userId } });
+    await this.outbox.enqueue(tx, 'sms.send', { to: user.phoneE164, body: `DSCC ই-রিকশা: আবেদন ${app.applicationNumber}-এর সংশোধন জমা হয়েছে।` });
+    return {
+      id: app.id,
+      applicationNumber: app.applicationNumber,
+      status: 'SUBMITTED',
+      submittedAt: app.submittedAt?.toISOString() ?? null,
+      decisionDueDate: isoDate(app.decisionDueDate),
+    };
   }
 
   /** Withdraw a submitted application; releases the owner's quota slot in the same transaction. */
@@ -368,6 +507,9 @@ export class ApplicationsService {
         await tx.vehicleDriverAssignment.updateMany({ where: { vehicleId: app.vehicleId, validTo: null }, data: { validTo: now } });
         await this.quota.release(tx, { vehicleId: app.vehicleId, cityId: city.id, reason: 'APPLICATION_WITHDRAWN', actor: { type: 'USER', id: actor.userId } });
       }
+      await tx.fitnessInspection.updateMany({ where: { applicationId: app.id, status: 'SCHEDULED' }, data: { status: 'CANCELLED' } });
+      await tx.invoice.updateMany({ where: { applicationId: app.id, status: 'UNPAID' }, data: { status: 'CANCELLED' } });
+      await tx.correctionRequest.updateMany({ where: { applicationId: app.id, resolvedAt: null }, data: { resolvedAt: now } });
       await tx.applicationStatusEvent.create({
         data: { applicationId: app.id, cityId: city.id, fromStatus: app.status, toStatus: to, actorType: 'USER', actorId: actor.userId },
       });

@@ -1,4 +1,17 @@
-import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, scrypt, timingSafeEqual } from 'node:crypto';
+import {
+  KeyObject,
+  createCipheriv,
+  createDecipheriv,
+  createHash,
+  createHmac,
+  createPrivateKey,
+  createPublicKey,
+  randomBytes,
+  scrypt,
+  sign as edSign,
+  timingSafeEqual,
+  verify as edVerify,
+} from 'node:crypto';
 import { promisify } from 'node:util';
 
 const scryptAsync = promisify(scrypt) as (pw: string, salt: Buffer, len: number, opts: object) => Promise<Buffer>;
@@ -67,4 +80,40 @@ export function uuidv7(): string {
   b[8] = (b[8] & 0x3f) | 0x80;
   const h = b.toString('hex');
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+}
+
+// ─── Ed25519 signatures for QR credentials ───
+
+const ED25519_PKCS8_PREFIX = Buffer.from('302e020100300506032b657004220420', 'hex');
+
+/** Build an Ed25519 private key from a 32-byte seed (base64). */
+export function ed25519KeyFromSeed(seedB64: string): { privateKey: KeyObject; publicKey: KeyObject } {
+  const seed = Buffer.from(seedB64, 'base64');
+  if (seed.length !== 32) throw new Error('Ed25519 seed must be 32 bytes');
+  const privateKey = createPrivateKey({ key: Buffer.concat([ED25519_PKCS8_PREFIX, seed]), format: 'der', type: 'pkcs8' });
+  return { privateKey, publicKey: createPublicKey(privateKey) };
+}
+
+export function ed25519Sign(privateKey: KeyObject, message: string): string {
+  return edSign(null, Buffer.from(message, 'utf8'), privateKey).toString('base64url');
+}
+
+export function ed25519Verify(publicKey: KeyObject, message: string, signatureB64url: string): boolean {
+  try {
+    const sig = Buffer.from(signatureB64url, 'base64url');
+    if (sig.length !== 64) return false;
+    return edVerify(null, Buffer.from(message, 'utf8'), publicKey, sig);
+  } catch {
+    return false;
+  }
+}
+
+export function hmacB64url(keyB64: string, data: string): string {
+  return createHmac('sha256', Buffer.from(keyB64, 'base64')).update(data).digest('base64url');
+}
+
+export function safeEqualStr(a: string, b: string): boolean {
+  const ab = Buffer.from(a);
+  const bb = Buffer.from(b);
+  return ab.length === bb.length && timingSafeEqual(ab, bb);
 }

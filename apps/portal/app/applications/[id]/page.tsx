@@ -37,5 +37,10 @@ export default function ApplicationPage() {
     );
   }
   if (!app) return <Spinner />;
-  return app.status === 'DRAFT' ? <ApplicationWizard initial={app} onSubmitted={load} /> : <ApplicationView app={app} onChange={load} />;
+  // Drafts and files returned for correction open in the editable wizard; everything else is read-only.
+  return app.status === 'DRAFT' || app.status === 'CORRECTION_REQUESTED' ? (
+    <ApplicationWizard key={app.status} initial={app} onSubmitted={load} />
+  ) : (
+    <ApplicationView app={app} onChange={load} />
+  );
 }

@@ -32,8 +32,9 @@ execFileSync(require.resolve('prisma/build/index.js'), ['migrate', 'deploy'], {
     GRANT USAGE ON SCHEMA public TO ${appRole};
     GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA public TO ${appRole};
     REVOKE ALL ON TABLE _prisma_migrations FROM ${appRole};
-    REVOKE UPDATE ON audit_events, application_revisions, application_status_events, zone_versions FROM ${appRole};
-    REVOKE INSERT, UPDATE ON roles, permissions, role_permissions, cities, manufacturers, approved_models, working_day_holidays FROM ${appRole};
+    REVOKE UPDATE ON audit_events, application_revisions, application_status_events, zone_versions,
+      verification_checks, application_decisions, payments, qr_scan_events FROM ${appRole};
+    REVOKE INSERT, UPDATE ON roles, permissions, role_permissions, cities, manufacturers, approved_models, working_day_holidays, fee_schedules FROM ${appRole};
     GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO ${appRole};
   `);
   await c.end();

@@ -30,6 +30,17 @@ const password = process.env.E2E_STAFF_PASSWORD || 'e2e-officer-password-2026';
   run([path.join(api, 'dist/seed/seed.js')]);
   run([path.join(api, 'dist/seed/create-staff.js'), 'admin@dscc.test', 'আনিসুর রহমান', 'DSCC_ADMIN']);
   run([path.join(api, 'dist/seed/create-staff.js'), 'intake@dscc.test', 'নাসরিন আক্তার', 'INTAKE_OFFICER']);
+  // Phase 2 workflow: each step is a different person (separation of duties).
+  const officers = [
+    ['verifier@dscc.test', 'শাহানা পারভীন', 'VERIFICATION_OFFICER'],
+    ['approver@dscc.test', 'মাহবুব আলম', 'APPROVING_OFFICER'],
+    ['approver2@dscc.test', 'ফারহানা ইসলাম', 'APPROVING_OFFICER'],
+    ['inspector@dscc.test', 'কামরুল হাসান', 'INSPECTION_OFFICER'],
+    ['traffic@dscc.test', 'সাইফুল ইসলাম', 'TRAFFIC_COUNTERSIGNER'],
+    ['plate@dscc.test', 'রুবিনা ইয়াসমিন', 'PLATE_OFFICER'],
+    ['appeal@dscc.test', 'মোস্তফা কামাল', 'APPEAL_AUTHORITY'],
+  ];
+  for (const [email, name, role] of officers) run([path.join(api, 'dist/seed/create-staff.js'), email, name, role]);
   console.log('E2E database ready');
 })().catch((e) => {
   console.error(e);

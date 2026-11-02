@@ -386,6 +386,12 @@ model Application {
   submittedAt       DateTime? @map("submitted_at") @db.Timestamptz(3)
   decisionDueDate   DateTime? @map("decision_due_date") @db.Date
   withdrawnAt       DateTime? @map("withdrawn_at") @db.Timestamptz(3)
+  // Phase 2 workflow
+  verifiedByStaffId     String?   @map("verified_by_staff_id") @db.Uuid // officer who started verification (cannot decide)
+  verificationStartedAt DateTime? @map("verification_started_at") @db.Timestamptz(3)
+  decidedAt             DateTime? @map("decided_at") @db.Timestamptz(3)
+  appealDeadline        DateTime? @map("appeal_deadline") @db.Date // Rule 4(7): 10 working days after rejection
+  rejectionFinalAt      DateTime? @map("rejection_final_at") @db.Timestamptz(3) // appeal window closed or appeal dismissed
   deletedAt         DateTime? @map("deleted_at") @db.Timestamptz(3) // drafts only (soft delete)
   createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt         DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
@@ -506,6 +512,221 @@ model OutboxEvent {
 
   @@index([status, availableAt])
   @@map("outbox_events")
+}
+
+// ───────────── Phase 2: verification, inspection, fees, decisions, registration ─────────────
+
+model VerificationCheck {
+  id            String   @id @default(uuid(7)) @db.Uuid
+  cityId        String   @map("city_id") @db.Uuid
+  applicationId String   @map("application_id") @db.Uuid
+  item          String
+  result        String // PASS | FAIL
+  note          String?
+  staffId       String   @map("staff_id") @db.Uuid
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([applicationId, createdAt])
+  @@map("verification_checks")
+}
+
+model CorrectionRequest {
+  id            String    @id @default(uuid(7)) @db.Uuid
+  cityId        String    @map("city_id") @db.Uuid
+  applicationId String    @map("application_id") @db.Uuid
+  items         String[]
+  message       String
+  requestedBy   String    @map("requested_by_staff_id") @db.Uuid
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  resolvedAt    DateTime? @map("resolved_at") @db.Timestamptz(3)
+
+  @@index([applicationId, createdAt])
+  @@map("correction_requests")
+}
+
+model FitnessInspection {
+  id               String    @id @default(uuid(7)) @db.Uuid
+  cityId           String    @map("city_id") @db.Uuid
+  applicationId    String    @map("application_id") @db.Uuid
+  vehicleId        String    @map("vehicle_id") @db.Uuid
+  status           String // SCHEDULED | PASSED | FAILED | CANCELLED
+  scheduledFor     DateTime  @map("scheduled_for") @db.Timestamptz(3)
+  location         String
+  scheduledBy      String    @map("scheduled_by_staff_id") @db.Uuid
+  checklist        Json?
+  inspectorStaffId String?   @map("inspector_staff_id") @db.Uuid
+  inspectedAt      DateTime? @map("inspected_at") @db.Timestamptz(3)
+  inspectorNote    String?   @map("inspector_note")
+  countersignedBy  String?   @map("countersigned_by_staff_id") @db.Uuid
+  countersignedAt  DateTime? @map("countersigned_at") @db.Timestamptz(3)
+  certificateNo    String?   @unique @map("certificate_no")
+  validUntil       DateTime? @map("valid_until") @db.Date
+  version          Int       @default(1)
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([applicationId])
+  @@index([cityId, status, scheduledFor])
+  @@map("fitness_inspections")
+}
+
+model SerialCounter {
+  cityId    String @map("city_id") @db.Uuid
+  kind      String // INVOICE | RECEIPT | FITNESS | PLATE
+  scope     String // year, or zone code for plates
+  lastValue Int    @default(0) @map("last_value")
+
+  @@id([cityId, kind, scope])
+  @@map("serial_counters")
+}
+
+// Schedule 2 fees, versioned by effective dates. Reference data: only the schema owner writes it.
+model FeeSchedule {
+  id            String    @id @default(uuid(7)) @db.Uuid
+  service       String // REGISTRATION | RENEWAL | FITNESS
+  seatType      String?   @map("seat_type")
+  amountBdt     Int       @map("amount_bdt")
+  effectiveFrom DateTime  @map("effective_from") @db.Date
+  effectiveTo   DateTime? @map("effective_to") @db.Date
+  legalRef      String    @map("legal_ref")
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@map("fee_schedules")
+}
+
+model Invoice {
+  id            String    @id @default(uuid(7)) @db.Uuid
+  cityId        String    @map("city_id") @db.Uuid
+  applicationId String    @map("application_id") @db.Uuid
+  invoiceNo     String    @unique @map("invoice_no")
+  purpose       String // NEW_REGISTRATION
+  status        String // UNPAID | PAID | CANCELLED
+  totalBdt      Int       @map("total_bdt")
+  lines         Json
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  paidAt        DateTime? @map("paid_at") @db.Timestamptz(3)
+
+  payments Payment[]
+
+  @@index([applicationId])
+  @@index([cityId, status, createdAt])
+  @@map("invoices")
+}
+
+model Payment {
+  id              String   @id @default(uuid(7)) @db.Uuid
+  cityId          String   @map("city_id") @db.Uuid
+  invoiceId       String   @map("invoice_id") @db.Uuid
+  method          String // ONLINE_SIMULATOR | COUNTER_CHALLAN
+  providerRef     String   @map("provider_ref") // gateway transaction id or bank challan number
+  amountBdt       Int      @map("amount_bdt")
+  status          String // SUCCEEDED | FAILED
+  receiptNo       String?  @unique @map("receipt_no")
+  recordedByStaff String?  @map("recorded_by_staff_id") @db.Uuid
+  details         Json     @default("{}")
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id])
+
+  @@unique([method, providerRef])
+  @@map("payments")
+}
+
+model PaymentSession {
+  id        String    @id @default(uuid(7)) @db.Uuid
+  cityId    String    @map("city_id") @db.Uuid
+  invoiceId String    @map("invoice_id") @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  status    String // PENDING | COMPLETED | FAILED | EXPIRED
+  amountBdt Int       @map("amount_bdt")
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  closedAt  DateTime? @map("closed_at") @db.Timestamptz(3)
+
+  @@index([invoiceId])
+  @@map("payment_sessions")
+}
+
+model ApplicationDecision {
+  id            String   @id @default(uuid(7)) @db.Uuid
+  cityId        String   @map("city_id") @db.Uuid
+  applicationId String   @map("application_id") @db.Uuid
+  decision      String // APPROVED | REJECTED
+  reasonCodes   String[] @map("reason_codes")
+  reasonText    String?  @map("reason_text")
+  decidedBy     String   @map("decided_by_staff_id") @db.Uuid
+  gates         Json
+  decidedAt     DateTime @default(now()) @map("decided_at") @db.Timestamptz(3)
+
+  @@index([applicationId, decidedAt])
+  @@map("application_decisions")
+}
+
+model Appeal {
+  id            String    @id @default(uuid(7)) @db.Uuid
+  cityId        String    @map("city_id") @db.Uuid
+  applicationId String    @map("application_id") @db.Uuid
+  decisionId    String    @unique @map("decision_id") @db.Uuid
+  filedByUserId String    @map("filed_by_user_id") @db.Uuid
+  grounds       String
+  status        String // PENDING | ALLOWED | DISMISSED
+  filedAt       DateTime  @default(now()) @map("filed_at") @db.Timestamptz(3)
+  decidedBy     String?   @map("decided_by_staff_id") @db.Uuid
+  decidedAt     DateTime? @map("decided_at") @db.Timestamptz(3)
+  decisionNote  String?   @map("decision_note")
+
+  @@index([cityId, status, filedAt])
+  @@map("appeals")
+}
+
+model Registration {
+  id             String   @id @default(uuid(7)) @db.Uuid
+  cityId         String   @map("city_id") @db.Uuid
+  applicationId  String   @unique @map("application_id") @db.Uuid
+  vehicleId      String   @map("vehicle_id") @db.Uuid
+  ownerIdentityId String  @map("owner_identity_id") @db.Uuid
+  zoneId         String   @map("zone_id") @db.Uuid
+  plateSerial    Int      @map("plate_serial")
+  plateSystemId  String   @unique @map("plate_system_id") // DSCC-Z1-0001 (proposed, DSCC approval pending)
+  plateTextBn    String   @map("plate_text_bn") // ঢাকা দক্ষিণ-ক-০০০১ (Schedule 3)
+  registeredOn   DateTime @map("registered_on") @db.Date
+  validUntil     DateTime @map("valid_until") @db.Date // Rule 4(5)
+  endOfLifeOn    DateTime @map("end_of_life_on") @db.Date // Rule 5(2)
+  status         String // ACTIVE | SUSPENDED | CANCELLED
+  issuedBy       String   @map("issued_by_staff_id") @db.Uuid
+  issuedAt       DateTime @default(now()) @map("issued_at") @db.Timestamptz(3)
+
+  @@unique([zoneId, plateSerial])
+  @@index([vehicleId])
+  @@map("registrations")
+}
+
+model QrCredential {
+  id             String    @id @default(uuid(7)) @db.Uuid
+  cityId         String    @map("city_id") @db.Uuid
+  registrationId String    @map("registration_id") @db.Uuid
+  tokenId        String    @unique @map("token_id")
+  version        Int
+  status         String // ACTIVE | REVOKED
+  issuedBy       String    @map("issued_by_staff_id") @db.Uuid
+  issuedAt       DateTime  @default(now()) @map("issued_at") @db.Timestamptz(3)
+  revokedAt      DateTime? @map("revoked_at") @db.Timestamptz(3)
+  revokeReason   String?   @map("revoke_reason")
+
+  @@unique([registrationId, version])
+  @@map("qr_credentials")
+}
+
+// Public QR verification log (no IP stored in clear: SHA-256 with a server key).
+model QrScanEvent {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  cityId    String   @map("city_id") @db.Uuid
+  tokenId   String   @map("token_id")
+  result    String // VALID | REVOKED | INVALID_SIGNATURE | UNKNOWN | INACTIVE
+  ipHash    String?  @map("ip_hash")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([tokenId, createdAt])
+  @@map("qr_scan_events")
 }
 
 // Development/test SMS sink used by the simulator adapter. Never used when a real gateway is configured.

@@ -10,7 +10,17 @@ export default function Home() {
   const router = useRouter();
   useEffect(() => {
     if (state.status === 'anonymous') router.replace('/login');
-    if (state.status === 'ready') router.replace(state.me.permissions.includes('application.read') ? '/applications' : '/zones');
+    if (state.status === 'ready') {
+      const p = state.me.permissions;
+      const first: [string, string][] = [
+        ['application.read', '/applications'],
+        ['inspection.read', '/inspections'],
+        ['payment.read', '/payments'],
+        ['registration.read', '/registrations'],
+        ['appeal.read', '/appeals'],
+      ];
+      router.replace(first.find(([perm]) => p.includes(perm))?.[1] ?? '/zones');
+    }
   }, [state, router]);
   return <Spinner />;
 }

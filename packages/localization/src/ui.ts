@@ -2,7 +2,9 @@
  * User-interface strings. Bengali is the primary language; English is optional.
  * Both dictionaries must have identical keys and {placeholders} (enforced by test).
  */
-const bn = {
+import { bnPhase2, enPhase2 } from './ui-phase2';
+
+const bnCore = {
   'app.title': 'DSCC ই-রিকশা ব্যবস্থাপনা সিস্টেম',
   'app.city': 'ঢাকা দক্ষিণ সিটি কর্পোরেশন',
   'app.operator': 'প্রযুক্তি সহযোগী: UCAR Technologies Limited (প্রস্তাবিত)',
@@ -227,7 +229,7 @@ const bn = {
   'admin.summary.total': 'মোট জমা',
   'admin.summary.byZone': 'জোনভিত্তিক আবেদন',
   'admin.queue.title': 'আবেদন ক্যু',
-  'admin.queue.readOnly': 'এই ধাপে ক্যু শুধু দেখার জন্য। যাচাই, অনুমোদন ও না-মঞ্জুর পরের ধাপে যুক্ত হবে।',
+  'admin.queue.readOnly': 'আবেদন খুলে যাচাই, সংশোধন, পরিদর্শন ও সিদ্ধান্তের কাজ করুন। প্রতিটি কাজ অডিট লগে লেখা হয়।',
   'admin.filter.status': 'অবস্থা',
   'admin.filter.zone': 'জোন',
   'admin.filter.search': 'আবেদন নম্বর',
@@ -274,9 +276,10 @@ const bn = {
   'admin.zones.updated': 'জোন হালনাগাদ হয়েছে।',
 } as const;
 
+const bn = { ...bnCore, ...bnPhase2 } as const;
 export type UiKey = keyof typeof bn;
 
-const en: Record<UiKey, string> = {
+const enCore: Record<keyof typeof bnCore, string> = {
   'app.title': 'DSCC E-Rickshaw Management System',
   'app.city': 'Dhaka South City Corporation',
   'app.operator': 'Technology partner: UCAR Technologies Limited (proposed)',
@@ -501,7 +504,7 @@ const en: Record<UiKey, string> = {
   'admin.summary.total': 'Total submitted',
   'admin.summary.byZone': 'Applications by zone',
   'admin.queue.title': 'Application queue',
-  'admin.queue.readOnly': 'The queue is read-only in this phase. Verification, approval and rejection come in the next phase.',
+  'admin.queue.readOnly': 'Open an application to verify, request corrections, schedule inspection and decide. Every action is audited.',
   'admin.filter.status': 'Status',
   'admin.filter.zone': 'Zone',
   'admin.filter.search': 'Application number',
@@ -547,6 +550,8 @@ const en: Record<UiKey, string> = {
   'admin.zones.version': 'Version {version}',
   'admin.zones.updated': 'Zone updated.',
 };
+
+const en: Record<UiKey, string> = { ...enCore, ...enPhase2 };
 
 export const uiMessages = { bn: bn as Record<UiKey, string>, en };
 export type Lang = keyof typeof uiMessages;

@@ -133,7 +133,7 @@ describe('staff login with TOTP MFA and RBAC', () => {
     await a.post('/api/v1/staff/auth/mfa/verify').set(CSRF).send({ code: totpAt(secret, Date.now() + 30_000) }).expect(200);
     const me = await a.get('/api/v1/staff/auth/me').expect(200);
     expect(me.body.roles).toEqual(['INTAKE_OFFICER']);
-    expect(me.body.permissions).toEqual(['application.read', 'zone.read']);
+    expect(me.body.permissions).toEqual(['application.read', 'application.verify', 'inspection.read', 'inspection.schedule', 'payment.read', 'zone.read']);
   });
 
   it('stores the TOTP secret encrypted', async () => {

@@ -3,8 +3,9 @@
 import { DefinitionList, ErrorAlert, Notice, Spinner, StatusBadge, ZoneChip, api, useI18n } from '@dscc/web-ui';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useRequireStaff } from '../../../components/session';
+import { WorkflowPanel } from '../../../components/workflow-panel';
 
 interface Detail {
   id: string;
@@ -58,9 +59,12 @@ export default function Detail() {
   const [d, setD] = useState<Detail | null>(null);
   const [error, setError] = useState<unknown>(null);
 
+  const load = useCallback(() => {
+    void api<Detail>(`/admin/applications/${id}`).then(setD).catch(setError);
+  }, [id]);
   useEffect(() => {
-    if (me) void api<Detail>(`/admin/applications/${id}`).then(setD).catch(setError);
-  }, [me, id]);
+    if (me) load();
+  }, [me, load]);
 
   if (!me) return <Spinner />;
   if (error) return <ErrorAlert error={error} />;
@@ -79,6 +83,7 @@ export default function Detail() {
         {d.sla && <span className={`badge badge-${d.sla.toLowerCase()}`}>{tk(`sla.${d.sla}`)}</span>}
       </p>
       <Notice>{t('admin.detail.auditNote')}</Notice>
+      <WorkflowPanel id={d.id} onChanged={load} />
       <div className="grid2">
         <div className="card">
           <h2>{t('admin.detail.owner')}</h2>
@@ -162,6 +167,7 @@ export default function Detail() {
             {d.timeline.map((e, i) => (
               <li key={i}>
                 <StatusBadge status={e.toStatus} /> <span className="muted small">{date(e.at, true)} · {tk(`actor.${e.actorType}`)}</span>
+                {e.note && <p className="small">{e.note}</p>}
               </li>
             ))}
           </ol>

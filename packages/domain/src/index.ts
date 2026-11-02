@@ -6,3 +6,4 @@ export * from './working-days';
 export * from './application-status';
 export * from './schemas';
 export * from './colour';
+export * from './workflow';
