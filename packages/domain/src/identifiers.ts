@@ -49,3 +49,24 @@ export function formatPlateBengali(cityNameBn: string, areaCodeBn: string, seria
   if (!Number.isInteger(serial) || serial < 1 || serial > 9999) throw new Error('plate serial out of range');
   return `${cityNameBn.trim()}-${areaCodeBn.trim()}-${toBengaliDigits(String(serial).padStart(4, '0'))}`;
 }
+
+/**
+ * QR credential token: Q1.<CITY>.<random id>.<version>.<Ed25519 signature>, all base64url-safe.
+ * The signed message is everything before the last dot. It carries no NID, phone or plate number;
+ * the random id is looked up server-side, and the signature lets an offline reader detect forgeries.
+ */
+export const QR_TOKEN_VERSION = 'Q1';
+
+export function qrSignedMessage(cityCode: string, tokenId: string, version: number): string {
+  if (!/^[A-Z]{2,8}$/.test(cityCode)) throw new Error('invalid city code');
+  if (!/^[A-Za-z0-9_-]{22}$/.test(tokenId)) throw new Error('invalid token id');
+  if (!Number.isInteger(version) || version < 1 || version > 999) throw new Error('invalid version');
+  return `${QR_TOKEN_VERSION}.${cityCode}.${tokenId}.${version}`;
+}
+
+export function parseQrToken(token: string): { cityCode: string; tokenId: string; version: number; message: string; signature: string } | null {
+  if (typeof token !== 'string' || token.length > 200) return null;
+  const m = /^(Q1)\.([A-Z]{2,8})\.([A-Za-z0-9_-]{22})\.([1-9]\d{0,2})\.([A-Za-z0-9_-]{86})$/.exec(token);
+  if (!m) return null;
+  return { cityCode: m[2], tokenId: m[3], version: Number(m[4]), message: `${m[1]}.${m[2]}.${m[3]}.${m[4]}`, signature: m[5] };
+}

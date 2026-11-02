@@ -42,6 +42,10 @@ export function mapDbError(e: unknown): AppError | null {
   if (msg.includes('OWNER_NID_VEHICLE_LIMIT_REACHED')) return conflict('OWNER_NID_VEHICLE_LIMIT_REACHED');
   if (msg.includes('vehicles_city_chassis_live_uq')) return conflict('CHASSIS_ALREADY_REGISTERED');
   if (msg.includes('vehicles_city_motor_live_uq')) return conflict('MOTOR_ALREADY_REGISTERED');
+  if (msg.includes('SEPARATION_OF_DUTIES')) return new AppError('SEPARATION_OF_DUTIES', 403);
+  if (msg.includes('PAYMENT_AMOUNT_MISMATCH')) return badRequest('PAYMENT_AMOUNT_MISMATCH');
+  if (msg.includes('APPROVAL_DECISION_MISSING')) return conflict('APPROVAL_DECISION_MISSING');
+  if (msg.includes('registrations_zone_id_plate_serial_key') || msg.includes('registrations_vehicle_live_uq')) return conflict('REGISTRATION_ALREADY_ISSUED');
   return null;
 }
 

@@ -1,6 +1,6 @@
 import { toBengaliDigits } from '@dscc/domain';
 import { PrismaClient } from '@prisma/client';
-import { CITY, PERMISSIONS, ROLES, SAMPLE_HOLIDAYS, SAMPLE_MODELS, ZONES, sampleWards } from './reference-data';
+import { CITY, FEE_SCHEDULE_2026, PERMISSIONS, ROLES, SAMPLE_HOLIDAYS, SAMPLE_MODELS, ZONES, sampleWards } from './reference-data';
 
 /** Idempotent reference-data seed. Must run as the schema owner (MIGRATION_DATABASE_URL). */
 export async function seedReferenceData(prisma: PrismaClient): Promise<void> {
@@ -53,6 +53,12 @@ export async function seedReferenceData(prisma: PrismaClient): Promise<void> {
       const exists = await prisma.approvedModel.findFirst({ where: { manufacturerId: man.id, name: model.name } });
       if (!exists) await prisma.approvedModel.create({ data: { manufacturerId: man.id, name: model.name, seatType: model.seatType, isSample: true } });
     }
+  }
+
+  for (const f of FEE_SCHEDULE_2026) {
+    const effectiveFrom = new Date(`${f.effectiveFrom}T00:00:00Z`);
+    const exists = await prisma.feeSchedule.findFirst({ where: { service: f.service, seatType: f.seatType, effectiveFrom } });
+    if (!exists) await prisma.feeSchedule.create({ data: { ...f, effectiveFrom } });
   }
 
   for (const h of SAMPLE_HOLIDAYS) {

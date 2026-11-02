@@ -32,6 +32,22 @@ import { StaffAuthController } from './modules/auth/staff-auth';
 import { CatalogController } from './modules/catalog/catalog';
 import { OwnerService, OwnersController } from './modules/owners/owners';
 import { QuotaService } from './modules/owners/quota.service';
+import { StepUpService } from './modules/auth/step-up.service';
+import {
+  AdminInspectionsController,
+  AdminPaymentsController,
+  AdminRegistrationsController,
+  AdminWorkflowController,
+  CitizenWorkflowController,
+  DevPaymentGatewayController,
+  MaintenanceService,
+  PaymentWebhookController,
+  PublicVerifyController,
+} from './modules/workflow/controllers';
+import { DecisionService } from './modules/workflow/decision.service';
+import { FeesService } from './modules/workflow/fees.service';
+import { InspectionService } from './modules/workflow/inspection.service';
+import { RegistrationService } from './modules/workflow/registration.service';
 
 /**
  * CSRF defence for cookie-authenticated APIs: state-changing requests must carry a custom header,
@@ -39,6 +55,8 @@ import { QuotaService } from './modules/owners/quota.service';
  */
 export function csrfHeaderMiddleware(req: Request, res: Response, next: NextFunction): void {
   if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
+  // Server-to-server gateway callbacks carry an HMAC signature instead (verified in FeesService).
+  if (req.originalUrl.startsWith('/api/v1/payments/webhook/')) return next();
   if (req.headers['x-dscc-csrf'] === '1') return next();
   next(new AppError('CSRF_HEADER_MISSING', 403));
 }
@@ -84,6 +102,12 @@ export class AppModule implements NestModule {
       QuotaService,
       FilesService,
       ApplicationsService,
+      StepUpService,
+      FeesService,
+      InspectionService,
+      DecisionService,
+      RegistrationService,
+      MaintenanceService,
       { provide: SMS_ADAPTER, useClass: SimulatorSmsAdapter },
       { provide: NID_ADAPTER, useFactory: () => (config.NID_VERIFICATION_PROVIDER === 'manual' ? new ManualNidAdapter() : new SimulatorNidAdapter()) },
       { provide: STORAGE_ADAPTER, useFactory: () => new LocalDiskStorage(config.STORAGE_DIR) },
@@ -99,8 +123,16 @@ export class AppModule implements NestModule {
       ApplicationsController,
       AdminApplicationsController,
       AdminZonesController,
+      AdminWorkflowController,
+      AdminInspectionsController,
+      AdminPaymentsController,
+      AdminRegistrationsController,
+      CitizenWorkflowController,
+      PaymentWebhookController,
+      PublicVerifyController,
     ];
     if (config.SMS_PROVIDER === 'simulator' && config.NODE_ENV !== 'production') controllers.push(DevSmsController);
+    if (config.PAYMENT_PROVIDER === 'simulator' && config.NODE_ENV !== 'production') controllers.push(DevPaymentGatewayController);
     return { module: AppModule, providers, controllers };
   }
 
