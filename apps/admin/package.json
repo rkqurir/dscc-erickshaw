@@ -1,0 +1,28 @@
+{
+  "name": "@dscc/admin",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev -p 3001",
+    "build": "next build",
+    "start": "next start -p 3001",
+    "typecheck": "tsc --noEmit",
+    "lint": "tsc --noEmit",
+    "test": "echo 'covered by e2e'"
+  },
+  "dependencies": {
+    "@dscc/domain": "workspace:*",
+    "@dscc/localization": "workspace:*",
+    "@dscc/web-ui": "workspace:*",
+    "@fontsource/noto-sans-bengali": "5.2.10",
+    "next": "15.5.4",
+    "react": "19.1.1",
+    "react-dom": "19.1.1"
+  },
+  "devDependencies": {
+    "@types/node": "22.18.6",
+    "@types/react": "19.1.17",
+    "@types/react-dom": "19.1.11",
+    "typescript": "5.9.3"
+  }
+}
