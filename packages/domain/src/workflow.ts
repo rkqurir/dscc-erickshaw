@@ -175,10 +175,21 @@ export function feeFor(rows: FeeScheduleRow[], service: FeeService, seatType: st
   return { service, seatType: pick.seatType, amountBdt: pick.amountBdt, feeScheduleId: pick.id, legalRef: pick.legalRef };
 }
 
-/** A new registration application pays the registration fee for its seat type and the fitness fee. */
+/**
+ * A new registration application pays the registration fee for its seat type. The fitness fee is paid
+ * separately with each inspection request, because the certificate must exist before the application is
+ * submitted (DSCC decision, 2026-11-02).
+ */
 export function applicationFeeLines(rows: FeeScheduleRow[], seatType: string, onDate: string): FeeLine[] {
-  return [feeFor(rows, 'REGISTRATION', seatType, onDate), feeFor(rows, 'FITNESS', seatType, onDate)];
+  return [feeFor(rows, 'REGISTRATION', seatType, onDate)];
 }
+
+export function fitnessFeeLines(rows: FeeScheduleRow[], seatType: string, onDate: string): FeeLine[] {
+  return [feeFor(rows, 'FITNESS', seatType, onDate)];
+}
+
+/** Applications may request a fitness inspection while the applicant can still change the vehicle or is waiting for a decision. */
+export const FITNESS_REQUEST_STATUSES: ReadonlySet<string> = new Set(['DRAFT', 'CORRECTION_REQUESTED', 'SUBMITTED', 'UNDER_VERIFICATION']);
 
 export const counterPaymentSchema = z.object({
   challanNo: z

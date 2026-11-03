@@ -125,6 +125,7 @@ export interface InvoiceData {
   totalBdt: number;
   lines: { service: string; amountBdt: number; legalRef: string }[];
   payments: { method: string; reference: string; amountBdt: number; status: string; receiptNo: string | null; at: string }[];
+  refunds?: { id: string; method: string; amountBdt: number; status: string; reference: string | null; createdAt: string; completedAt: string | null }[];
 }
 
 /** Invoice with its Schedule 2 lines and successful receipts. */
@@ -148,6 +149,13 @@ export function InvoiceSummary({ invoice }: { invoice: InvoiceData }) {
             {t('invoice.receipt', { no: p.receiptNo ?? '' })} · {tk(`method.${p.method}`)} · {p.reference} · {date(p.at, true)}
           </p>
         ))}
+      {(invoice.refunds ?? []).map((r) => (
+        <p key={r.id} className="small" data-testid="refund">
+          <span className={`badge badge-${r.status === 'COMPLETED' ? 'paid' : 'pending'}`}>{tk(`refund.${r.status}`)}</span>{' '}
+          {t('refund.line', { amount: num(r.amountBdt) })}
+          {r.reference ? ` · ${t('refund.reference', { ref: r.reference })} · ${date(r.completedAt, true)}` : ` · ${t('refund.pendingBank')}`}
+        </p>
+      ))}
     </>
   );
 }

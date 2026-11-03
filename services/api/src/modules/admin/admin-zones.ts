@@ -22,7 +22,7 @@ type ZoneRow = {
   updatedAt: Date;
 };
 
-const SAMPLE_SERIAL = 2324;
+const SAMPLE_SERIAL = 1;
 
 /** Zones Z1–Z4. Colours, plate codes and quotas are proposals until DSCC + traffic approve (Rule 9(3)). */
 @Controller('admin/zones')

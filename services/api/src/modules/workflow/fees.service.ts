@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { FeeLine, FeeScheduleRow, applicationFeeLines, counterPaymentSchema, formatSerial, maskNid } from '@dscc/domain';
+import { FITNESS_REQUEST_STATUSES, FeeLine, FeeScheduleRow, applicationFeeLines, counterPaymentSchema, fitnessFeeLines, formatSerial, maskNid } from '@dscc/domain';
 import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import { AppConfig, CONFIG } from '../../config';
@@ -24,6 +24,26 @@ export const callbackSchema = z.object({
   at: z.string(),
 });
 export type PaymentCallback = z.infer<typeof callbackSchema>;
+
+export const refundCompletionSchema = z.object({
+  reference: z
+    .string()
+    .trim()
+    .transform((s) => s.toUpperCase())
+    .refine((s) => /^[A-Z0-9\-/]{4,40}$/.test(s), { message: 'SERIAL_INVALID' }),
+});
+
+const REGISTRATION_PAYABLE = new Set(['SUBMITTED', 'UNDER_VERIFICATION', 'CORRECTION_REQUESTED']);
+
+type InvoiceRow = Awaited<ReturnType<Tx['invoice']['findFirstOrThrow']>>;
+type RefundRow = Awaited<ReturnType<Tx['refund']['findFirstOrThrow']>>;
+
+/** How the applicant's SMS names the application: its number once submitted, the chassis number before. */
+export function applicationLabel(app: { applicationNumber: string | null; formData: unknown }): string {
+  if (app.applicationNumber) return `আবেদন ${app.applicationNumber}`;
+  const chassis = (app.formData as { vehicle?: { chassisNo?: string } })?.vehicle?.chassisNo;
+  return chassis ? `চেসিস ${chassis}` : 'খসড়া আবেদন';
+}
 
 /**
  * Schedule 2 fees and payments. Every invoice stores the fee-schedule rows it was priced from, so a
@@ -54,7 +74,7 @@ export class FeesService {
     }));
   }
 
-  /** Create the registration + fitness fee invoice for an application if it has none (idempotent). */
+  /** Create the registration fee invoice for an application if it has none (idempotent). */
   async ensureInvoice(tx: Tx, p: { cityId: string; cityCode: string; applicationId: string; seatType: string; onDate?: string }) {
     const existing = await tx.invoice.findFirst({ where: { applicationId: p.applicationId, purpose: 'NEW_REGISTRATION', status: { not: 'CANCELLED' } } });
     if (existing) return existing;
@@ -80,29 +100,71 @@ export class FeesService {
     });
   }
 
-  static view(inv: { id: string; invoiceNo: string; status: string; totalBdt: number; lines: unknown; createdAt: Date; paidAt: Date | null }, payments: { method: string; providerRef: string; amountBdt: number; status: string; receiptNo: string | null; createdAt: Date }[] = []) {
+  /** A new fitness fee invoice for one inspection request. */
+  async createFitnessInvoice(tx: Tx, p: { cityId: string; cityCode: string; applicationId: string; seatType: string }) {
+    const onDate = dhakaToday();
+    let lines: FeeLine[];
+    try {
+      lines = fitnessFeeLines(await this.scheduleRows(tx), p.seatType, onDate);
+    } catch {
+      throw new AppError('FEE_SCHEDULE_MISSING', 500);
+    }
+    const year = Number(onDate.slice(0, 4));
+    const invoiceNo = formatSerial('INV', p.cityCode, year, await nextSerial(tx, p.cityId, 'INVOICE', String(year)));
+    return tx.invoice.create({
+      data: { cityId: p.cityId, applicationId: p.applicationId, invoiceNo, purpose: 'FITNESS', status: 'UNPAID', totalBdt: lines.reduce((n, l) => n + l.amountBdt, 0), lines: lines as unknown as object },
+    });
+  }
+
+  static view(
+    inv: { id: string; invoiceNo: string; purpose?: string; status: string; totalBdt: number; lines: unknown; createdAt: Date; paidAt: Date | null },
+    payments: { method: string; providerRef: string; amountBdt: number; status: string; receiptNo: string | null; createdAt: Date }[] = [],
+    refunds: RefundRow[] = [],
+  ) {
     return {
       id: inv.id,
       invoiceNo: inv.invoiceNo,
+      purpose: inv.purpose ?? 'NEW_REGISTRATION',
       status: inv.status,
       totalBdt: inv.totalBdt,
       lines: inv.lines as FeeLine[],
       createdAt: inv.createdAt,
       paidAt: inv.paidAt,
       payments: payments.map((p) => ({ method: p.method, reference: p.providerRef, amountBdt: p.amountBdt, status: p.status, receiptNo: p.receiptNo, at: p.createdAt })),
+      refunds: refunds.map(FeesService.refundView),
     };
   }
 
+  static refundView(r: RefundRow) {
+    return { id: r.id, method: r.method, amountBdt: r.amountBdt, status: r.status, reason: r.reason, reference: r.providerRef, createdAt: r.createdAt, completedAt: r.completedAt };
+  }
+
   // ─── Citizen: start a (simulated) online payment ───
-  async checkout(userId: string, applicationId: string) {
+  /**
+   * Pay one of the application's unpaid invoices: the given one, otherwise the oldest. A fitness invoice
+   * can be paid from the draft (fitness comes before the application); the registration invoice once submitted.
+   */
+  async checkout(userId: string, applicationId: string, invoiceId?: unknown) {
     if (!UUID_RE.test(applicationId)) throw notFound();
+    if (invoiceId !== undefined && (typeof invoiceId !== 'string' || !UUID_RE.test(invoiceId))) throw notFound();
     const city = await this.cities.defaultCity();
     return this.prisma.inCity(city.id, async (tx) => {
       const app = await tx.application.findFirst({ where: { id: applicationId, applicantUserId: userId, deletedAt: null } });
       if (!app) throw notFound();
-      if (!['SUBMITTED', 'UNDER_VERIFICATION', 'CORRECTION_REQUESTED'].includes(app.status)) throw conflict('APPLICATION_INVALID_STATE');
-      const seatType = (app.formData as { vehicle?: { seatType?: string } }).vehicle?.seatType ?? 'TWO_SEAT';
-      const inv = await this.ensureInvoice(tx, { cityId: city.id, cityCode: city.code, applicationId: app.id, seatType });
+      let inv: InvoiceRow | null;
+      if (invoiceId) {
+        inv = await tx.invoice.findFirst({ where: { id: invoiceId, applicationId: app.id } });
+        if (!inv) throw notFound();
+      } else {
+        inv = await tx.invoice.findFirst({ where: { applicationId: app.id, status: 'UNPAID' }, orderBy: { createdAt: 'asc' } });
+        if (!inv && REGISTRATION_PAYABLE.has(app.status)) {
+          const seatType = (app.formData as { vehicle?: { seatType?: string } }).vehicle?.seatType ?? 'TWO_SEAT';
+          inv = await this.ensureInvoice(tx, { cityId: city.id, cityCode: city.code, applicationId: app.id, seatType });
+        }
+        if (!inv) throw conflict('INVOICE_ALREADY_PAID');
+      }
+      const payable = inv.purpose === 'FITNESS' ? FITNESS_REQUEST_STATUSES.has(app.status) : REGISTRATION_PAYABLE.has(app.status);
+      if (!payable) throw conflict('APPLICATION_INVALID_STATE');
       if (inv.status !== 'UNPAID') throw conflict('INVOICE_ALREADY_PAID');
       const session = await tx.paymentSession.create({
         data: { cityId: city.id, invoiceId: inv.id, userId, status: 'PENDING', amountBdt: inv.totalBdt, expiresAt: new Date(Date.now() + SESSION_TTL_MS) },
@@ -199,7 +261,7 @@ export class FeesService {
       entityId: p.invoice.id,
       data: { method: p.method, reference: p.providerRef, amountBdt: p.amountBdt, receiptNo, applicationNumber: app.applicationNumber },
     });
-    await notifyApplicant(tx, this.outbox, app.applicantUserId, `DSCC ই-রিকশা: আবেদন ${app.applicationNumber}-এর ফি ${p.amountBdt} টাকা গৃহীত হয়েছে। রশিদ নং ${receiptNo}।`);
+    await notifyApplicant(tx, this.outbox, app.applicantUserId, `DSCC ই-রিকশা: ${applicationLabel(app)}-এর ফি ${p.amountBdt} টাকা গৃহীত হয়েছে। রশিদ নং ${receiptNo}।`);
     return receiptNo;
   }
 
@@ -214,6 +276,7 @@ export class FeesService {
         take: 200,
         include: { payments: { orderBy: { createdAt: 'asc' } } },
       });
+      const refunds = await tx.refund.findMany({ where: { invoiceId: { in: invoices.map((i) => i.id) } }, orderBy: { createdAt: 'asc' } });
       const appRows = await tx.application.findMany({ where: { id: { in: invoices.map((i) => i.applicationId) } } });
       const owners = await tx.ownerIdentity.findMany({ where: { id: { in: appRows.map((a) => a.ownerIdentityId) } } });
       const amap = new Map(appRows.map((a) => [a.id, a]));
@@ -222,8 +285,8 @@ export class FeesService {
         const a = amap.get(i.applicationId);
         const o = a ? omap.get(a.ownerIdentityId) : undefined;
         return {
-          ...FeesService.view(i, i.payments),
-          application: a ? { id: a.id, applicationNumber: a.applicationNumber, status: a.status } : null,
+          ...FeesService.view(i, i.payments, refunds.filter((r) => r.invoiceId === i.id)),
+          application: a ? { id: a.id, applicationNumber: a.applicationNumber, status: a.status, label: applicationLabel(a) } : null,
           owner: o ? { nameBn: o.nameBn, nidMasked: maskNid(o.nidLast4) } : null,
         };
       });
@@ -259,6 +322,111 @@ export class FeesService {
         staffId: s.staffId,
       });
       return { status: 'PAID', receiptNo };
+    });
+  }
+
+  // ─── Refunds (DSCC decision, 2026-11-02: fees are returned when a rejection becomes final) ───
+
+  /**
+   * Refund every paid invoice of the application. Online payments go back through the gateway at once
+   * (simulator); a bank challan refund waits for a revenue officer to record the bank reference.
+   * Idempotent: a payment is refunded at most once (unique payment_id).
+   */
+  async refundApplication(tx: Tx, p: { cityId: string; applicationId: string; reason: string; actor: { type: 'STAFF' | 'SYSTEM'; id: string | null } }) {
+    const invoices = await tx.invoice.findMany({ where: { applicationId: p.applicationId, status: 'PAID' } });
+    let total = 0;
+    let pending = 0;
+    for (const inv of invoices) {
+      const payment = await tx.payment.findFirst({ where: { invoiceId: inv.id, status: 'SUCCEEDED' } });
+      if (!payment || (await tx.refund.findUnique({ where: { paymentId: payment.id } }))) continue;
+      const online = payment.method === 'ONLINE_SIMULATOR';
+      const refund = await tx.refund.create({
+        data: {
+          cityId: p.cityId,
+          applicationId: p.applicationId,
+          invoiceId: inv.id,
+          paymentId: payment.id,
+          method: payment.method,
+          amountBdt: payment.amountBdt,
+          reason: p.reason,
+          status: online ? 'COMPLETED' : 'PENDING',
+          providerRef: online ? `SIMRF${randomBytes(9).toString('base64url')}` : null,
+          completedAt: online ? new Date() : null,
+        },
+      });
+      if (online) await tx.invoice.update({ where: { id: inv.id }, data: { status: 'REFUNDED' } });
+      else pending++;
+      total += refund.amountBdt;
+      await this.audit.record(tx, {
+        cityId: p.cityId,
+        actorType: p.actor.type,
+        actorId: p.actor.id,
+        action: online ? 'refund.completed' : 'refund.pending',
+        entityType: 'invoice',
+        entityId: inv.id,
+        data: { refundId: refund.id, amountBdt: refund.amountBdt, method: refund.method, reason: p.reason, reference: refund.providerRef },
+      });
+    }
+    if (total > 0) {
+      const app = await tx.application.findUniqueOrThrow({ where: { id: p.applicationId } });
+      const how = pending ? 'ব্যাংক চালানে জমা দেওয়া অংশ ব্যাংকের মাধ্যমে ফেরত দেওয়া হবে।' : 'টাকা যে মাধ্যমে দিয়েছিলেন সেখানে ফেরত যাবে।';
+      await notifyApplicant(tx, this.outbox, app.applicantUserId, `DSCC ই-রিকশা: ${applicationLabel(app)} চূড়ান্তভাবে না-মঞ্জুর হওয়ায় ${total} টাকা ফেরত দেওয়া হচ্ছে। ${how}`);
+    }
+    return { total, pending };
+  }
+
+  async listRefunds(s: StaffContext, q: { status?: string }) {
+    const scope = zoneFilter(s);
+    return this.prisma.inCity(s.cityId, async (tx) => {
+      const apps = scope ? await tx.application.findMany({ where: { zoneId: { in: scope } }, select: { id: true } }) : null;
+      const rows = await tx.refund.findMany({
+        where: { ...(q.status ? { status: q.status } : {}), ...(apps ? { applicationId: { in: apps.map((a) => a.id) } } : {}) },
+        orderBy: { createdAt: 'desc' },
+        take: 200,
+      });
+      const [appRows, invoices, payments] = await Promise.all([
+        tx.application.findMany({ where: { id: { in: rows.map((r) => r.applicationId) } } }),
+        tx.invoice.findMany({ where: { id: { in: rows.map((r) => r.invoiceId) } } }),
+        tx.payment.findMany({ where: { id: { in: rows.map((r) => r.paymentId) } } }),
+      ]);
+      const owners = await tx.ownerIdentity.findMany({ where: { id: { in: appRows.map((a) => a.ownerIdentityId) } } });
+      const amap = new Map(appRows.map((a) => [a.id, a]));
+      const imap = new Map(invoices.map((i) => [i.id, i]));
+      const pmap = new Map(payments.map((x) => [x.id, x]));
+      const omap = new Map(owners.map((o) => [o.id, o]));
+      return rows.map((r) => {
+        const a = amap.get(r.applicationId);
+        const o = a ? omap.get(a.ownerIdentityId) : undefined;
+        const pay = pmap.get(r.paymentId);
+        return {
+          ...FeesService.refundView(r),
+          invoiceNo: imap.get(r.invoiceId)?.invoiceNo ?? null,
+          paidReference: pay?.providerRef ?? null,
+          receiptNo: pay?.receiptNo ?? null,
+          application: a ? { id: a.id, applicationNumber: a.applicationNumber, status: a.status, label: applicationLabel(a) } : null,
+          owner: o ? { nameBn: o.nameBn, nidMasked: maskNid(o.nidLast4) } : null,
+        };
+      });
+    });
+  }
+
+  /** A revenue officer records the bank reference of a challan refund. */
+  async completeRefund(s: StaffContext, refundId: string, body: unknown) {
+    const input = parseOrThrow(refundCompletionSchema, body);
+    if (!UUID_RE.test(refundId)) throw notFound();
+    const scope = zoneFilter(s);
+    return this.prisma.inCity(s.cityId, async (tx) => {
+      await tx.$queryRaw`SELECT id FROM refunds WHERE id = ${refundId}::uuid FOR UPDATE`;
+      const r = await tx.refund.findUnique({ where: { id: refundId } });
+      if (!r) throw notFound();
+      const app = await tx.application.findUniqueOrThrow({ where: { id: r.applicationId } });
+      if (scope && (!app.zoneId || !scope.includes(app.zoneId))) throw notFound();
+      if (r.status !== 'PENDING') throw conflict('REFUND_ALREADY_COMPLETED');
+      const upd = await tx.refund.update({ where: { id: r.id }, data: { status: 'COMPLETED', providerRef: input.reference, completedAt: new Date(), completedByStaff: s.staffId } });
+      await tx.invoice.update({ where: { id: r.invoiceId }, data: { status: 'REFUNDED' } });
+      await this.audit.record(tx, { cityId: s.cityId, actorType: 'STAFF', actorId: s.staffId, action: 'refund.completed', entityType: 'invoice', entityId: r.invoiceId, data: { refundId: r.id, amountBdt: r.amountBdt, reference: input.reference } });
+      await notifyApplicant(tx, this.outbox, app.applicantUserId, `DSCC ই-রিকশা: ${applicationLabel(app)}-এর ${r.amountBdt} টাকা ফেরত দেওয়া হয়েছে। ব্যাংক রেফারেন্স ${input.reference}।`);
+      return FeesService.refundView(upd);
     });
   }
 }

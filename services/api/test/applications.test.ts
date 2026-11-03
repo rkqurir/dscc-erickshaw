@@ -136,14 +136,15 @@ describe('application drafts, documents and submission', () => {
     await agent.patch(`/api/v1/applications/${d.body.id}`).set(CSRF).send({ version: 1, form: fullForm(ctx) }).expect(200);
     const docs = await agent.post(`/api/v1/applications/${d.body.id}/submit`).set(CSRF).expect(400);
     expect(docs.body.error.code).toBe('DOCUMENTS_MISSING');
-    expect(docs.body.error.details.missing).toContain('FITNESS_CERTIFICATE');
+    // The fitness certificate is issued in the system before submission, so an uploaded copy is optional.
+    expect(docs.body.error.details.missing).not.toContain('FITNESS_CERTIFICATE');
     expect(docs.body.error.details.missing).toContain('FEE_RECEIPT');
   });
 
   it('rejects a ward from another zone and a model that does not match the seat type', async () => {
     const { agent } = await loginCitizen(ctx);
     await registerOwner(agent);
-    const id = await readyDraft(ctx, agent, { wardId: ctx.catalog.otherZoneWardId });
+    const id = await readyDraft(ctx, agent, { wardId: ctx.catalog.otherZoneWardId }, { certify: false });
     const r = await agent.post(`/api/v1/applications/${id}/submit`).set(CSRF).expect(400);
     expect(r.body.error.code).toBe('ZONE_WARD_MISMATCH');
     const form = fullForm(ctx);

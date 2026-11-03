@@ -22,18 +22,23 @@ export function parseApplicationNumber(value: string): { cityCode: string; year:
 }
 
 /**
- * Machine-readable plate/system ID: <CITY>-<ZONE>-<4-digit serial>, e.g. DSCC-Z1-2324.
+ * Machine-readable plate/system ID: <CITY>-<ZONE>-<6-digit serial>, e.g. DSCC-Z1-000001
+ * (format confirmed by DSCC, 2026-11-02).
  * Proposed format, subject to DSCC approval.
  */
+/** Plate serials are six digits per zone: 000001–999999. */
+export const PLATE_SERIAL_DIGITS = 6;
+export const PLATE_SERIAL_MAX = 999_999;
+
 export function formatPlateSystemId(cityCode: string, zoneCode: string, serial: number): string {
   if (!/^[A-Z]{2,8}$/.test(cityCode)) throw new Error('invalid city code');
   if (!/^Z\d{1,2}$/.test(zoneCode)) throw new Error('invalid zone code');
-  if (!Number.isInteger(serial) || serial < 1 || serial > 9999) throw new Error('plate serial out of range');
-  return `${cityCode}-${zoneCode}-${String(serial).padStart(4, '0')}`;
+  if (!Number.isInteger(serial) || serial < 1 || serial > PLATE_SERIAL_MAX) throw new Error('plate serial out of range');
+  return `${cityCode}-${zoneCode}-${String(serial).padStart(PLATE_SERIAL_DIGITS, '0')}`;
 }
 
 export function parsePlateSystemId(value: string): { cityCode: string; zoneCode: string; serial: number } | null {
-  const m = /^([A-Z]{2,8})-(Z\d{1,2})-(\d{4})$/.exec(value.trim().toUpperCase());
+  const m = /^([A-Z]{2,8})-(Z\d{1,2})-(\d{6})$/.exec(value.trim().toUpperCase());
   if (!m) return null;
   const serial = Number(m[3]);
   if (serial < 1) return null;
@@ -46,8 +51,8 @@ export function parsePlateSystemId(value: string): { cityCode: string; zoneCode:
  */
 export function formatPlateBengali(cityNameBn: string, areaCodeBn: string, serial: number): string {
   if (!cityNameBn.trim() || !areaCodeBn.trim()) throw new Error('city name and area code are required');
-  if (!Number.isInteger(serial) || serial < 1 || serial > 9999) throw new Error('plate serial out of range');
-  return `${cityNameBn.trim()}-${areaCodeBn.trim()}-${toBengaliDigits(String(serial).padStart(4, '0'))}`;
+  if (!Number.isInteger(serial) || serial < 1 || serial > PLATE_SERIAL_MAX) throw new Error('plate serial out of range');
+  return `${cityNameBn.trim()}-${areaCodeBn.trim()}-${toBengaliDigits(String(serial).padStart(PLATE_SERIAL_DIGITS, '0'))}`;
 }
 
 /**

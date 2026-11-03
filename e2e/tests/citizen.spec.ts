@@ -1,6 +1,6 @@
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test } from '@playwright/test';
-import { PDF, PNG, PORTAL, REQUIRED_DOCS, acceptConsent, citizenLogin, registerOwnerViaApi, submitApplicationViaApi, uniqueNid, uniquePhone } from './helpers';
+import { PDF, PNG, PORTAL, REQUIRED_DOCS, acceptConsent, certifyViaDb, citizenLogin, registerOwnerViaApi, submitApplicationViaApi, uniqueNid, uniquePhone } from './helpers';
 
 const DOC_LABELS: Record<string, string> = {
   OWNER_NID_COPY: 'মালিকের NID-এর সত্যায়িত কপি',
@@ -83,6 +83,18 @@ test('citizen registers with OTP, becomes an owner, fills the application in Ben
   await expect(page.getByTestId('doc-INSURANCE_DOCUMENT')).toContainText('শুধু JPG, PNG বা PDF ফাইল গ্রহণযোগ্য।');
 
   await page.getByRole('button', { name: 'পরবর্তী' }).click();
+  await page.getByLabel(/আমি ঘোষণা করছি/).check();
+  // DSCC decision, 2026-11-02: no submission without a fitness certificate.
+  await page.getByRole('button', { name: 'আবেদন জমা দিন' }).click();
+  await expect(page.getByTestId('review-fitness-missing')).toHaveText('ফিটনেস সনদ এখনো নেই। সনদ ইস্যু হলে জমা দিতে পারবেন।');
+  await expect(page.getByTestId('fitness-card')).toContainText('আবেদন জমা দেওয়ার আগে ফিটনেস সনদ লাগবে।');
+  // The inspection flow is covered in workflow.spec.ts; here the certificate is a fixture.
+  const draftId = new URL(page.url()).pathname.split('/').pop()!;
+  await certifyViaDb(draftId);
+  await page.reload();
+  await expect(page.getByTestId('fitness-certificate')).toContainText(/সনদ FIT-E2E-\d+, মেয়াদ/);
+  await expect(page.getByLabel('চেসিস নম্বর')).toBeDisabled();
+  await page.getByRole('button', { name: /যাচাই ও জমা/ }).click();
   await page.getByLabel(/আমি ঘোষণা করছি/).check();
   await page.getByRole('button', { name: 'আবেদন জমা দিন' }).click();
 

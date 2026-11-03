@@ -12,6 +12,13 @@
 অনুমোদন, না-মঞ্জুর, আপিলের সিদ্ধান্ত, প্লেট ইস্যু ও QR পুনঃইস্যুতে নতুন TOTP কোড লাগে; প্রতিটি ধাপ ভিন্ন
 কর্মকর্তা করেন (দায়িত্ব বিভাজন অ্যাপ ও ডাটাবেস দুই জায়গায় বাধ্যতামূলক)।
 
+**ডিএসসিসির সিদ্ধান্ত (২০২৬-১১-০২):** আবেদন জমার আগেই ফিটনেস সনদ লাগবে — আবেদনকারী খসড়া থেকে পরিদর্শনের আবেদন
+করেন, ফিটনেস ফি দেন, কর্মকর্তা সময় দেন, পরিদর্শন ও প্রতিস্বাক্ষরের পর সনদ ইস্যু হলে তবেই জমা দেওয়া যায়;
+সনদ চেসিস ও মোটর নম্বরের সাথে বাঁধা। না-মঞ্জুর চূড়ান্ত হলে পরিশোধিত সব ফি (ফিটনেস ফিসহ) ফেরত যায় — অনলাইন
+পেমেন্ট সঙ্গে সঙ্গে, ব্যাংক চালানের টাকা রাজস্ব কর্মকর্তা ব্যাংক রেফারেন্স লিখলে। ব্যাংক চালানে একজন কর্মকর্তার
+এন্ট্রিই যথেষ্ট (দ্বিতীয় অনুমোদন নেই)। ৩০ কর্মদিবসের সময়সীমা সংশোধনের সময়েও চলতে থাকে। প্লেট নম্বর
+`DSCC-Z1-000001` (ছয় অঙ্ক)।
+
 ব্লু বুক, নবায়ন, ট্রাফিক পোর্টাল ও জরিমানা এখনো নেই। জরিমানা বন্ধ থাকবে; RFID গেজেটে নেই বলে রাখা হয়নি।
 সব SMS, NID যাচাই ও পেমেন্ট সিমুলেটর; কোনো সরকারি সিস্টেমের সাথে লাইভ সংযোগ নেই। প্রোডাকশন মোডে
 সিমুলেটর চালু থাকলে API চালুই হয় না।
@@ -75,5 +82,5 @@ pnpm test:e2e    # builds must exist; recreates dscc_e2e
 
 - No deploy, merge to main, or live government integration without explicit DSCC approval.
 - Fines are disabled until DSCC legal confirms them. RFID is not in the gazette and is not built. Plate format follows the Phase 0 recommendation
-  (system ID `DSCC-Z1-2324`, printed `ঢাকা দক্ষিণ-ক-২৩২৪`) pending DSCC decision.
+  (system ID `DSCC-Z1-000001`, six digits, confirmed by DSCC on 2026-11-02; printed `ঢাকা দক্ষিণ-ক-০০০০০১`). Zone colours are still pending DSCC decision.
 - Zone wards, vehicle models and holidays in the seed are samples until DSCC supplies official lists.

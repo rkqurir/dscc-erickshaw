@@ -1,6 +1,6 @@
 import { INestApplication } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
-import { randomInt } from 'node:crypto';
+import { randomInt, randomUUID } from 'node:crypto';
 import request from 'supertest';
 import TestAgent from 'supertest/lib/agent';
 import { createApp } from '../src/bootstrap';
@@ -163,11 +163,45 @@ export async function uploadAllDocs(agent: Agent, appId: string): Promise<void> 
 }
 
 /** Create a draft, fill the complete form and upload all documents. Returns the draft id. */
-export async function readyDraft(ctx: TestCtx, agent: Agent, over: Parameters<typeof fullForm>[1] = {}): Promise<string> {
+/**
+ * A draft that is ready to submit. Unless `certify` is false it also gets a valid fitness certificate for its
+ * chassis and motor (inserted as a fixture; the inspection flow itself is tested in workflow.test.ts).
+ */
+export async function readyDraft(ctx: TestCtx, agent: Agent, over: Parameters<typeof fullForm>[1] = {}, opts: { certify?: boolean } = {}): Promise<string> {
   const d = await agent.post('/api/v1/applications').set(CSRF).expect(201);
   await agent.patch(`/api/v1/applications/${d.body.id}`).set(CSRF).send({ version: d.body.version, form: fullForm(ctx, over) }).expect(200);
   await uploadAllDocs(agent, d.body.id);
+  if (opts.certify !== false) await certifyFitness(ctx, d.body.id);
   return d.body.id;
+}
+
+/** Fixture: a passed, countersigned, valid fitness certificate for the vehicle now in the application form. */
+export async function certifyFitness(ctx: TestCtx, applicationId: string): Promise<string> {
+  const app = await ctx.owner.application.findUniqueOrThrow({ where: { id: applicationId } });
+  const v = (app.formData as { vehicle: { chassisNo: string; motorNo: string; seatType: string; modelId: string } }).vehicle;
+  const row = await ctx.owner.fitnessInspection.create({
+    data: {
+      cityId: app.cityId,
+      applicationId,
+      vehicleId: app.vehicleId,
+      chassisNo: v.chassisNo,
+      motorNo: v.motorNo,
+      seatType: v.seatType,
+      modelId: v.modelId,
+      status: 'PASSED',
+      scheduledFor: new Date(),
+      location: 'নগর ভবন',
+      scheduledBy: randomUUID(),
+      checklist: { BRAKES: 'PASS', LIGHTING: 'PASS', HORN: 'PASS', SPEED_GOVERNOR: 'PASS', CHASSIS_BODY: 'PASS', SPEEDOMETER: 'PASS' },
+      inspectorStaffId: randomUUID(),
+      inspectedAt: new Date(),
+      countersignedBy: randomUUID(),
+      countersignedAt: new Date(),
+      certificateNo: uniqueSerial('FIT-T'),
+      validUntil: new Date(Date.now() + 300 * 86_400_000),
+    },
+  });
+  return row.id;
 }
 
 export async function submitNew(ctx: TestCtx, agent: Agent): Promise<{ id: string; applicationNumber: string }> {

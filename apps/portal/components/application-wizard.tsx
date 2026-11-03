@@ -13,6 +13,7 @@ import { ApiError, ErrorAlert, Field, Notice, api, newIdempotencyKey, useI18n } 
 import { UiKey } from '@dscc/localization';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { FitnessCard } from './fitness-card';
 import type { ApplicationDetail } from './types';
 
 type Section = 'vehicle' | 'location' | 'driver' | 'declaration';
@@ -85,6 +86,9 @@ export function ApplicationWizard({ initial, onSubmitted }: { initial: Applicati
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const saving = useRef<Promise<void> | null>(null);
   const correction = initial.status === 'CORRECTION_REQUESTED' ? initial.correction : null;
+  // The certificate is for the rickshaw that was inspected: its identifying fields lock once an inspection is open.
+  const vehicleLocked = !!initial.fitness.openInspectionId || !!initial.fitness.certificate;
+  const hasCertificate = !!initial.fitness.certificate;
 
   useEffect(() => {
     void Promise.all([api<Zone[]>('/catalog/zones'), api<Manufacturer[]>('/catalog/models')])
@@ -205,7 +209,7 @@ export function ApplicationWizard({ initial, onSubmitted }: { initial: Applicati
     setTouchedSteps(new Set([0, 1, 2, 3, 4]));
     setError(null);
     setServerErrors({});
-    if (Object.keys(validation).length || missingDocs.length) return;
+    if (Object.keys(validation).length || missingDocs.length || !hasCertificate) return;
     setSubmitting(true);
     try {
       await flush();
@@ -234,7 +238,7 @@ export function ApplicationWizard({ initial, onSubmitted }: { initial: Applicati
     }
   }
 
-  const input = (section: Section, key: string, label: string, opts: { required?: boolean; type?: string; hint?: string; textarea?: boolean; inputMode?: 'numeric' | 'tel' } = {}) => (
+  const input = (section: Section, key: string, label: string, opts: { required?: boolean; type?: string; hint?: string; textarea?: boolean; inputMode?: 'numeric' | 'tel'; disabled?: boolean } = {}) => (
     <Field label={label} hint={opts.hint} required={opts.required ?? true} error={errFor(`${section}.${key}`)}>
       {(p) =>
         opts.textarea ? (
@@ -245,6 +249,7 @@ export function ApplicationWizard({ initial, onSubmitted }: { initial: Applicati
             name={`${section}.${key}`}
             type={opts.type ?? 'text'}
             inputMode={opts.inputMode}
+            disabled={opts.disabled}
             value={(form[section][key] as string | number | undefined) ?? ''}
             onChange={(e) => update(section, key, opts.type === 'number' ? (e.target.value === '' ? '' : Number(toAsciiDigits(e.target.value))) : e.target.value)}
           />
@@ -292,15 +297,17 @@ export function ApplicationWizard({ initial, onSubmitted }: { initial: Applicati
         </div>
       )}
       <ErrorAlert error={error} />
+      <FitnessCard app={initial} onChange={onSubmitted} beforeRequest={flush} />
 
       <div className="card">
         {step === 0 && (
           <>
             <h2>{t('app.step.vehicle')}</h2>
+            {vehicleLocked && <Notice>{t('fitc.locked')}</Notice>}
             <div className="grid2">
               <Field label={t('vehicle.seatType')} required error={errFor('vehicle.seatType')}>
                 {(p) => (
-                  <select {...p} name="vehicle.seatType" value={seatType ?? ''} onChange={(e) => update('vehicle', 'seatType', e.target.value)}>
+                  <select {...p} name="vehicle.seatType" value={seatType ?? ''} onChange={(e) => update('vehicle', 'seatType', e.target.value)} disabled={vehicleLocked}>
                     <option value="">—</option>
                     {SEAT_TYPES.map((s) => (
                       <option key={s} value={s}>
@@ -312,7 +319,7 @@ export function ApplicationWizard({ initial, onSubmitted }: { initial: Applicati
               </Field>
               <Field label={t('vehicle.model')} hint={t('vehicle.modelSampleNote')} required error={errFor('vehicle.modelId')}>
                 {(p) => (
-                  <select {...p} name="vehicle.modelId" value={(form.vehicle.modelId as string) ?? ''} onChange={(e) => update('vehicle', 'modelId', e.target.value)} disabled={!seatType}>
+                  <select {...p} name="vehicle.modelId" value={(form.vehicle.modelId as string) ?? ''} onChange={(e) => update('vehicle', 'modelId', e.target.value)} disabled={!seatType || vehicleLocked}>
                     <option value="">{t('vehicle.modelPlaceholder')}</option>
                     {models.map((m) => (
                       <optgroup key={m.id} label={lang === 'bn' ? m.nameBn : m.nameEn}>
@@ -341,8 +348,8 @@ export function ApplicationWizard({ initial, onSubmitted }: { initial: Applicati
                   </select>
                 )}
               </Field>
-              {input('vehicle', 'chassisNo', t('vehicle.chassis'))}
-              {input('vehicle', 'motorNo', t('vehicle.motor'))}
+              {input('vehicle', 'chassisNo', t('vehicle.chassis'), { disabled: vehicleLocked })}
+              {input('vehicle', 'motorNo', t('vehicle.motor'), { disabled: vehicleLocked })}
               {input('vehicle', 'insurancePolicyNo', t('vehicle.insurance'), { required: false })}
               {input('vehicle', 'colour', t('vehicle.colour'), { required: false })}
             </div>
@@ -462,7 +469,7 @@ export function ApplicationWizard({ initial, onSubmitted }: { initial: Applicati
           <>
             <h2>{t('app.step.review')}</h2>
             <p className="alert alert-info">{t('review.fee')}</p>
-            {touchedSteps.has(4) && (problemSections.length > 0 || missingDocs.length > 0) && (
+            {touchedSteps.has(4) && (problemSections.length > 0 || missingDocs.length > 0 || !hasCertificate) && (
               <div className="alert alert-error" role="alert" data-testid="review-problems">
                 <p style={{ margin: 0 }}>{t('review.problems')}</p>
                 <ul>
@@ -476,6 +483,7 @@ export function ApplicationWizard({ initial, onSubmitted }: { initial: Applicati
                       </li>
                     ))}
                   {missingDocs.length > 0 && <li>{t('review.missingDocs', { docs: missingDocs.map((d) => tk(`doc.${d}`)).join(', ') })}</li>}
+                  {!hasCertificate && <li data-testid="review-fitness-missing">{t('review.fitnessMissing')}</li>}
                 </ul>
               </div>
             )}

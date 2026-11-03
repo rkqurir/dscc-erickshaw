@@ -103,7 +103,7 @@ describe('zone configuration (Z1–Z4)', () => {
     const r = await admin.agent.get('/api/v1/admin/zones').expect(200);
     expect(r.body.map((z: { code: string }) => z.code)).toEqual(['Z1', 'Z2', 'Z3', 'Z4']);
     const z1 = r.body[0];
-    expect(z1.examples).toEqual({ systemId: 'DSCC-Z1-2324', plateBn: 'ঢাকা দক্ষিণ-ক-২৩২৪' });
+    expect(z1.examples).toEqual({ systemId: 'DSCC-Z1-000001', plateBn: 'ঢাকা দক্ষিণ-ক-০০০০০১' });
     expect(z1.plateContrastOk).toBe(true);
     const z3 = r.body[2];
     expect(z3.plateContrastOk).toBe(false);

@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
   ECONOMIC_LIFE_MONTHS,
+  PLATE_SERIAL_MAX,
   REGISTRATION_VALIDITY_MONTHS,
   formatPlateBengali,
   formatPlateSystemId,
@@ -33,9 +34,9 @@ const reissueSchema = z.object({
 
 /**
  * Plate number and QR credential issuance after approval (Rule 4(4), Schedule 3).
- * - Plate serial: atomic per city + zone counter, 0001–9999, never reused.
- * - Dual plate form (Phase 0 recommendation, pending DSCC approval): system ID DSCC-Z1-0001 and the
- *   Schedule 3 Bengali text "ঢাকা দক্ষিণ-ক-০০০১", both derived from the same row.
+ * - Plate serial: atomic per city + zone counter, 000001–999999, never reused.
+ * - Dual plate form (system ID format confirmed by DSCC, 2026-11-02): system ID DSCC-Z1-000001 and the
+ *   Schedule 3 Bengali text "ঢাকা দক্ষিণ-ক-০০০০০১", both derived from the same row.
  * - QR: random 128-bit id + version, Ed25519-signed; no NID, phone or name in the code.
  */
 @Injectable()
@@ -126,7 +127,7 @@ export class RegistrationService {
       await this.stepUp.verify(tx, s.staffId, input.totp, 'issue_registration');
       const zone = await tx.zone.findUniqueOrThrow({ where: { id: app.zoneId } });
       const serial = await nextSerial(tx, s.cityId, 'PLATE', zone.code);
-      if (serial > 9999) throw conflict('PLATE_SERIES_EXHAUSTED');
+      if (serial > PLATE_SERIAL_MAX) throw conflict('PLATE_SERIES_EXHAUSTED');
       const plateSystemId = formatPlateSystemId(city.code, zone.code, serial);
       const plateTextBn = formatPlateBengali(city.plateCityNameBn, zone.plateAreaCodeBn, serial);
       const today = dhakaToday();

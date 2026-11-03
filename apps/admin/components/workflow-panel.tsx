@@ -8,8 +8,10 @@ import { TotpField } from './totp-field';
 interface Inspection {
   id: string;
   status: string;
-  scheduledFor: string;
-  location: string;
+  chassisNo: string;
+  requestedAt: string;
+  scheduledFor: string | null;
+  location: string | null;
   checklist: Record<string, 'PASS' | 'FAIL'> | null;
   inspectorNote: string | null;
   countersigned: boolean;
@@ -39,7 +41,7 @@ export interface Workflow {
   decisions: { decision: string; reasons: string[]; reasonText: string | null; by: string | null; at: string }[];
   appeals: { id: string; status: string; grounds: string; filedAt: string; decisionNote: string | null }[];
   registration: { id: string; plateSystemId: string; plateTextBn: string; validUntil: string; status: string } | null;
-  can: { startVerification: boolean; check: boolean; requestCorrection: boolean; scheduleInspection: boolean; decide: boolean; approve: boolean };
+  can: { startVerification: boolean; check: boolean; requestCorrection: boolean; decide: boolean; approve: boolean };
 }
 
 export { InvoiceSummary as InvoiceView } from '@dscc/web-ui';
@@ -115,13 +117,13 @@ export function WorkflowPanel({ id, onChanged }: { id: string; onChanged: () => 
       <ul>
         {wf.inspections.map((i) => (
           <li key={i.id}>
-            <span className={`badge badge-${i.status.toLowerCase()}`}>{tk(`inspection.${i.status}`)}</span> {date(i.scheduledFor, true)} · {i.location}
+            <span className={`badge badge-${i.status.toLowerCase()}`}>{tk(`inspection.${i.status}`)}</span> {i.scheduledFor ? `${date(i.scheduledFor, true)} · ${i.location}` : date(i.requestedAt, true)}{' '}
+            <span className="small muted">({t('vehicle.chassis')}: {i.chassisNo})</span>
             {i.certificateNo && <div className="small">{t('wf.certificate', { no: i.certificateNo, date: date(i.validUntil) })}</div>}
             {i.status === 'PASSED' && !i.countersigned && <div className="small muted">{t('wf.awaitingCountersign')}</div>}
           </li>
         ))}
       </ul>
-      {wf.can.scheduleInspection && <ScheduleInspection id={id} onDone={refresh} />}
 
       <h3>{t('wf.invoice')}</h3>
       {wf.invoice ? <InvoiceView invoice={wf.invoice} /> : <p className="muted">—</p>}
@@ -277,39 +279,6 @@ function CorrectionForm({ id, onDone }: { id: string; onDone: () => Promise<void
         </button>
       </form>
     </details>
-  );
-}
-
-function ScheduleInspection({ id, onDone }: { id: string; onDone: () => Promise<void> }) {
-  const { t } = useI18n();
-  const a = useAction();
-  const [when, setWhen] = useState('');
-  const [where, setWhere] = useState('');
-  async function submit(e: FormEvent) {
-    e.preventDefault();
-    await a.run(async () => {
-      // datetime-local has no zone; officers schedule in Dhaka time (UTC+6).
-      const scheduledFor = when ? new Date(`${when}:00+06:00`).toISOString() : '';
-      await api(`/admin/applications/${id}/inspections`, { method: 'POST', json: { scheduledFor, location: where } });
-      await onDone();
-    });
-  }
-  return (
-    <form onSubmit={submit} className="card">
-      <h4>{t('wf.inspectionSchedule')}</h4>
-      <div className="grid2">
-        <Field label={t('wf.inspectionWhen')} error={a.fields.scheduledFor} required>
-          {(p) => <input {...p} type="datetime-local" value={when} onChange={(e) => setWhen(e.target.value)} />}
-        </Field>
-        <Field label={t('wf.inspectionWhere')} error={a.fields.location} required>
-          {(p) => <input {...p} type="text" value={where} onChange={(e) => setWhere(e.target.value)} />}
-        </Field>
-      </div>
-      <ErrorAlert error={a.error} />
-      <button className="btn btn-secondary" disabled={a.busy}>
-        {t('wf.inspectionSchedule')}
-      </button>
-    </form>
   );
 }
 

@@ -6,6 +6,7 @@ import {
   addMonthsIso,
   appealSchema,
   applicationFeeLines,
+  fitnessFeeLines,
   checklistComplete,
   correctionRequestSchema,
   feeFor,
@@ -89,8 +90,9 @@ describe('fees (Schedule 2)', () => {
     expect(feeFor(SCHEDULE, 'REGISTRATION', 'TWO_SEAT', '2026-06-01').amountBdt).toBe(5000);
     expect(feeFor(SCHEDULE, 'FITNESS', 'FOUR_SEAT', '2026-11-02')).toMatchObject({ amountBdt: 1000, feeScheduleId: 'f' });
     expect(() => feeFor(SCHEDULE, 'RENEWAL', 'TWO_SEAT', '2026-11-02')).toThrow(/FEE_SCHEDULE_MISSING/);
-    const lines = applicationFeeLines(SCHEDULE, 'FOUR_SEAT', '2026-11-02');
-    expect(lines.reduce((n, l) => n + l.amountBdt, 0)).toBe(11000);
+    // Registration and fitness are invoiced separately: fitness is paid with the inspection request.
+    expect(applicationFeeLines(SCHEDULE, 'FOUR_SEAT', '2026-11-02').map((l) => [l.service, l.amountBdt])).toEqual([['REGISTRATION', 10000]]);
+    expect(fitnessFeeLines(SCHEDULE, 'FOUR_SEAT', '2026-11-02').map((l) => [l.service, l.amountBdt])).toEqual([['FITNESS', 1000]]);
   });
   it('formats invoice, receipt and certificate serials', () => {
     expect(formatSerial('INV', 'DSCC', 2026, 7)).toBe('INV-DSCC-2026-000007');

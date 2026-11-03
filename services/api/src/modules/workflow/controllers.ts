@@ -19,7 +19,6 @@ const ip = (req: Request) => req.ip ?? null;
 export class AdminWorkflowController {
   constructor(
     private readonly decisions: DecisionService,
-    private readonly inspections: InspectionService,
     private readonly registrations: RegistrationService,
   ) {}
 
@@ -48,13 +47,6 @@ export class AdminWorkflowController {
   @RequirePermissions('application.verify')
   correction(@Staff() s: StaffContext, @Param('id') id: string, @Body() body: unknown) {
     return this.decisions.requestCorrection(s, id, body);
-  }
-
-  @Post(':id/inspections')
-  @HttpCode(201)
-  @RequirePermissions('inspection.schedule')
-  schedule(@Staff() s: StaffContext, @Param('id') id: string, @Body() body: unknown) {
-    return this.inspections.schedule(s, id, body);
   }
 
   @Post(':id/approve')
@@ -96,8 +88,16 @@ export class AdminInspectionsController {
   @Get()
   @RequirePermissions('inspection.read')
   list(@Staff() s: StaffContext, @Query() q: unknown) {
-    const { status } = parseOrThrow(statusQuery(['SCHEDULED', 'PASSED', 'FAILED', 'CANCELLED']), q);
+    const { status } = parseOrThrow(statusQuery(['REQUESTED', 'SCHEDULED', 'PASSED', 'FAILED', 'CANCELLED']), q);
     return this.inspections.list(s, status);
+  }
+
+  /** Give a paid fitness request its appointment. */
+  @Post(':id/schedule')
+  @HttpCode(200)
+  @RequirePermissions('inspection.schedule')
+  schedule(@Staff() s: StaffContext, @Param('id') id: string, @Body() body: unknown) {
+    return this.inspections.schedule(s, id, body);
   }
 
   @Post(':id/result')
@@ -134,8 +134,23 @@ export class AdminPaymentsController {
   @Get('invoices')
   @RequirePermissions('payment.read')
   list(@Staff() s: StaffContext, @Query() q: unknown) {
-    const { status } = parseOrThrow(statusQuery(['UNPAID', 'PAID', 'CANCELLED']), q);
+    const { status } = parseOrThrow(statusQuery(['UNPAID', 'PAID', 'CANCELLED', 'REFUNDED']), q);
     return this.fees.listInvoices(s, { status });
+  }
+
+  @Get('refunds')
+  @RequirePermissions('payment.read')
+  refunds(@Staff() s: StaffContext, @Query() q: unknown) {
+    const { status } = parseOrThrow(statusQuery(['PENDING', 'COMPLETED']), q);
+    return this.fees.listRefunds(s, { status });
+  }
+
+  /** Record the bank reference of a challan refund. One officer is enough (DSCC decision, 2026-11-02). */
+  @Post('refunds/:id/complete')
+  @HttpCode(200)
+  @RequirePermissions('payment.record')
+  completeRefund(@Staff() s: StaffContext, @Param('id') id: string, @Body() body: unknown) {
+    return this.fees.completeRefund(s, id, body);
   }
 
   @Post('invoices/:id/counter-payment')
@@ -196,12 +211,28 @@ export class CitizenWorkflowController {
   constructor(
     private readonly fees: FeesService,
     private readonly decisions: DecisionService,
+    private readonly inspections: InspectionService,
   ) {}
 
+  /** Pay an unpaid invoice of the application: `invoiceId` in the body, otherwise the oldest unpaid one. */
   @Post(':id/payments/checkout')
   @HttpCode(201)
-  checkout(@Citizen() c: CitizenContext, @Param('id') id: string) {
-    return this.fees.checkout(c.userId, id);
+  checkout(@Citizen() c: CitizenContext, @Param('id') id: string, @Body() body: unknown) {
+    return this.fees.checkout(c.userId, id, (body as { invoiceId?: unknown } | undefined)?.invoiceId);
+  }
+
+  /** Request a fitness inspection from the draft: the certificate is needed before submission. */
+  @Post(':id/fitness-request')
+  @HttpCode(201)
+  fitnessRequest(@Citizen() c: CitizenContext, @Param('id') id: string) {
+    return this.inspections.request(c.userId, id);
+  }
+
+  /** Withdraw an unpaid fitness request (e.g. to correct the chassis number). */
+  @Post(':id/fitness-request/cancel')
+  @HttpCode(200)
+  cancelFitnessRequest(@Citizen() c: CitizenContext, @Param('id') id: string) {
+    return this.inspections.cancelRequest(c.userId, id);
   }
 
   @Post(':id/appeal')

@@ -149,7 +149,8 @@ export const DOCUMENT_TYPES = {
   VEHICLE_PHOTO_BACK: { required: true },
   VEHICLE_PHOTO_LEFT: { required: true },
   VEHICLE_PHOTO_RIGHT: { required: true },
-  FITNESS_CERTIFICATE: { required: true },
+  // The certificate is issued in the system before submission (DSCC decision, 2026-11-02); an uploaded copy is optional.
+  FITNESS_CERTIFICATE: { required: false },
   FEE_RECEIPT: { required: true },
   DRIVER_PHOTO: { required: true },
   DRIVER_NID_COPY: { required: true },

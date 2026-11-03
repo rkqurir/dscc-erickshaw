@@ -4,6 +4,7 @@ import {
   DOCUMENT_TYPE_LIST,
   DocumentType,
   EDITABLE_APPLICATION_STATUSES,
+  FITNESS_REQUEST_STATUSES,
   REQUIRED_DOCUMENT_TYPES,
   addWorkingDays,
   applicationDraftSchema,
@@ -115,14 +116,19 @@ export class ApplicationsService {
         orderBy: { uploadedAt: 'asc' },
       });
       const events = await tx.applicationStatusEvent.findMany({ where: { applicationId: app.id }, orderBy: { createdAt: 'asc' } });
-      const [correction, inspections, invoice, decision, appeal, registration] = await Promise.all([
+      const [correction, inspections, invoices, refunds, decision, appeal, registration] = await Promise.all([
         tx.correctionRequest.findFirst({ where: { applicationId: app.id }, orderBy: { createdAt: 'desc' } }),
         tx.fitnessInspection.findMany({ where: { applicationId: app.id, status: { not: 'CANCELLED' } }, orderBy: { createdAt: 'asc' } }),
-        tx.invoice.findFirst({ where: { applicationId: app.id, purpose: 'NEW_REGISTRATION', status: { not: 'CANCELLED' } }, include: { payments: { orderBy: { createdAt: 'asc' } } } }),
+        tx.invoice.findMany({ where: { applicationId: app.id, status: { not: 'CANCELLED' } }, include: { payments: { where: { status: 'SUCCEEDED' }, orderBy: { createdAt: 'asc' } } }, orderBy: { createdAt: 'asc' } }),
+        tx.refund.findMany({ where: { applicationId: app.id }, orderBy: { createdAt: 'asc' } }),
         tx.applicationDecision.findFirst({ where: { applicationId: app.id }, orderBy: { decidedAt: 'desc' } }),
         tx.appeal.findFirst({ where: { applicationId: app.id }, orderBy: { filedAt: 'desc' } }),
         this.registrations.registrationFor(tx, city.code, app.id),
       ]);
+      const invoiceView = (i: (typeof invoices)[number]) => FeesService.view(i, i.payments, refunds.filter((r) => r.invoiceId === i.id));
+      const invoice = invoices.find((i) => i.purpose === 'NEW_REGISTRATION');
+      const imap = new Map(invoices.map((i) => [i.id, i]));
+      const fitness = await this.fitnessState(tx, app);
       const appealOpen =
         app.status === 'REJECTED' && !app.rejectionFinalAt && !!app.appealDeadline && isoDate(app.appealDeadline)! >= dhakaToday() && (!appeal || appeal.decisionId !== decision?.id);
       return {
@@ -146,8 +152,13 @@ export class ApplicationsService {
         timeline: events.map((e) => ({ fromStatus: e.fromStatus, toStatus: e.toStatus, actorType: e.actorType, note: e.note, at: e.createdAt })),
         requiredDocuments: REQUIRED_DOCUMENT_TYPES,
         correction: correction ? { items: correction.items, message: correction.message, at: correction.createdAt, open: !correction.resolvedAt } : null,
-        inspections: inspections.map(InspectionService.view),
-        invoice: invoice ? FeesService.view(invoice, invoice.payments.filter((p) => p.status === 'SUCCEEDED')) : null,
+        inspections: inspections.map((i) => {
+          const inv = i.invoiceId ? imap.get(i.invoiceId) : undefined;
+          return { ...InspectionService.view(i), invoice: inv ? invoiceView(inv) : null };
+        }),
+        fitness,
+        invoice: invoice ? invoiceView(invoice) : null,
+        fitnessInvoices: invoices.filter((i) => i.purpose === 'FITNESS').map(invoiceView),
         decision: decision ? { decision: decision.decision, reasons: decision.reasonCodes, reasonText: decision.reasonText, at: decision.decidedAt } : null,
         appealDeadline: isoDate(app.appealDeadline),
         rejectionFinal: !!app.rejectionFinalAt,
@@ -158,6 +169,22 @@ export class ApplicationsService {
     });
   }
 
+  /**
+   * Fitness before the application (DSCC decision, 2026-11-02): whether the rickshaw now in the form has a
+   * valid certificate, and whether the applicant can request an inspection.
+   */
+  private async fitnessState(tx: Tx, app: { id: string; status: string; formData: unknown }) {
+    const v = (app.formData as { vehicle?: { chassisNo?: unknown; motorNo?: unknown } }).vehicle;
+    const vehicle = typeof v?.chassisNo === 'string' && typeof v?.motorNo === 'string' ? { chassisNo: v.chassisNo, motorNo: v.motorNo } : null;
+    const cert = vehicle ? await InspectionService.validCertificate(tx, app.id, dhakaToday(), vehicle) : null;
+    const open = await InspectionService.openInspection(tx, app.id);
+    return {
+      certificate: cert ? { certificateNo: cert.certificateNo, validUntil: isoDate(cert.validUntil), chassisNo: cert.chassisNo, motorNo: cert.motorNo } : null,
+      openInspectionId: open?.id ?? null,
+      canRequest: FITNESS_REQUEST_STATUSES.has(app.status) && !cert && !open,
+    };
+  }
+
   async saveDraft(id: string, userId: string, body: unknown) {
     const parsed = parseOrThrow(applicationDraftSchema, (body as { form?: unknown })?.form ?? {});
     const version = Number((body as { version?: unknown })?.version);
@@ -166,6 +193,7 @@ export class ApplicationsService {
     return this.prisma.inCity(city.id, async (tx) => {
       const app = await this.ownApplication(tx, id, userId);
       if (!EDITABLE_APPLICATION_STATUSES.has(app.status as ApplicationStatus)) throw conflict('APPLICATION_INVALID_STATE');
+      await this.guardFitnessVehicle(tx, app, parsed.vehicle);
       const loc = parsed.location as { zoneId?: unknown; wardId?: unknown } | undefined;
       const uuid = (v: unknown) => (typeof v === 'string' && /^[0-9a-f-]{36}$/i.test(v) ? v : null);
       // After submission the zone/ward columns describe the submitted vehicle; they change only on resubmit.
@@ -179,11 +207,31 @@ export class ApplicationsService {
     });
   }
 
+  /**
+   * While an inspection is requested or scheduled, or a certificate is valid, the vehicle fields the
+   * inspection is bound to cannot change: the certificate is for the rickshaw that was inspected.
+   */
+  private async guardFitnessVehicle(tx: Tx, app: { id: string; formData: unknown }, next: Record<string, unknown> | undefined) {
+    const prev = ((app.formData as { vehicle?: Record<string, unknown> }).vehicle ?? {}) as Record<string, unknown>;
+    const changed = (['chassisNo', 'motorNo', 'modelId', 'seatType'] as const).filter((k) => (prev[k] ?? null) !== (next?.[k] ?? null));
+    if (!changed.length) return;
+    const open = await InspectionService.openInspection(tx, app.id);
+    const cert = !open && typeof prev.chassisNo === 'string' && typeof prev.motorNo === 'string'
+      ? await InspectionService.validCertificate(tx, app.id, dhakaToday(), { chassisNo: prev.chassisNo, motorNo: prev.motorNo })
+      : null;
+    if (open || cert) throw new AppError('VEHICLE_LOCKED_FOR_FITNESS', 409, { fields: Object.fromEntries(changed.map((k) => [`vehicle.${k}`, 'LOCKED'])) });
+  }
+
   async deleteDraft(id: string, userId: string) {
     const city = await this.city();
     await this.prisma.inCity(city.id, async (tx) => {
       const app = await this.ownApplication(tx, id, userId, true);
       if (app.status !== 'DRAFT') throw conflict('APPLICATION_INVALID_STATE');
+      // A paid fitness fee or a certificate belongs to this draft; deleting it would lose them.
+      const paid = await tx.invoice.findFirst({ where: { applicationId: app.id, status: { in: ['PAID', 'REFUNDED'] } } });
+      if (paid) throw conflict('DRAFT_HAS_PAYMENT');
+      await tx.fitnessInspection.updateMany({ where: { applicationId: app.id, status: 'REQUESTED' }, data: { status: 'CANCELLED' } });
+      await tx.invoice.updateMany({ where: { applicationId: app.id, status: 'UNPAID' }, data: { status: 'CANCELLED' } });
       await tx.application.update({ where: { id: app.id }, data: { deletedAt: new Date() } });
     });
   }
@@ -275,6 +323,10 @@ export class ApplicationsService {
         if (!model || !model.isActive) throw badRequest('VALIDATION_FAILED', { fields: { 'vehicle.modelId': 'REQUIRED' } });
         if (model.seatType !== form.vehicle.seatType) throw badRequest('MODEL_SEAT_MISMATCH');
 
+        // DSCC decision, 2026-11-02: the fitness certificate must exist before the application is submitted.
+        const cert = await InspectionService.validCertificate(tx, app.id, dhakaToday(), form.vehicle);
+        if (!cert) throw new AppError('FITNESS_CERTIFICATE_REQUIRED', 400);
+
         const live = await tx.vehicle.findFirst({
           where: {
             OR: [{ chassisNo: form.vehicle.chassisNo }, { motorNo: form.vehicle.motorNo }],
@@ -299,6 +351,8 @@ export class ApplicationsService {
             ${form.vehicle.chassisNo}, ${form.vehicle.motorNo}, ${form.vehicle.manufactureYear}, ${form.vehicle.batteryType},
             ${form.vehicle.hasSpeedometer}, ${form.vehicle.insurancePolicyNo ?? null}, ${form.vehicle.colour ?? null},
             ${zone.id}::uuid, ${ward.id}::uuid, ${form.location.chargingLocation}, 'PENDING_APPROVAL')`;
+
+        await tx.fitnessInspection.updateMany({ where: { applicationId: app.id, vehicleId: null }, data: { vehicleId } });
 
         await this.quota.reserve(tx, {
           ownerIdentityId: app.ownerIdentityId,
@@ -507,7 +561,7 @@ export class ApplicationsService {
         await tx.vehicleDriverAssignment.updateMany({ where: { vehicleId: app.vehicleId, validTo: null }, data: { validTo: now } });
         await this.quota.release(tx, { vehicleId: app.vehicleId, cityId: city.id, reason: 'APPLICATION_WITHDRAWN', actor: { type: 'USER', id: actor.userId } });
       }
-      await tx.fitnessInspection.updateMany({ where: { applicationId: app.id, status: 'SCHEDULED' }, data: { status: 'CANCELLED' } });
+      await tx.fitnessInspection.updateMany({ where: { applicationId: app.id, status: { in: ['REQUESTED', 'SCHEDULED'] } }, data: { status: 'CANCELLED' } });
       await tx.invoice.updateMany({ where: { applicationId: app.id, status: 'UNPAID' }, data: { status: 'CANCELLED' } });
       await tx.correctionRequest.updateMany({ where: { applicationId: app.id, resolvedAt: null }, data: { resolvedAt: now } });
       await tx.applicationStatusEvent.create({

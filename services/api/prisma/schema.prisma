@@ -548,11 +548,19 @@ model FitnessInspection {
   id               String    @id @default(uuid(7)) @db.Uuid
   cityId           String    @map("city_id") @db.Uuid
   applicationId    String    @map("application_id") @db.Uuid
-  vehicleId        String    @map("vehicle_id") @db.Uuid
-  status           String // SCHEDULED | PASSED | FAILED | CANCELLED
-  scheduledFor     DateTime  @map("scheduled_for") @db.Timestamptz(3)
-  location         String
-  scheduledBy      String    @map("scheduled_by_staff_id") @db.Uuid
+  // Fitness comes before the application (DSCC decision, 2026-11-02): the request is made from a draft,
+  // before any vehicle row exists, so the certificate is bound to the chassis and motor numbers.
+  vehicleId        String?   @map("vehicle_id") @db.Uuid
+  chassisNo        String    @map("chassis_no")
+  motorNo          String    @map("motor_no")
+  seatType         String    @map("seat_type")
+  modelId          String    @map("model_id") @db.Uuid
+  invoiceId        String?   @unique @map("invoice_id") @db.Uuid
+  requestedAt      DateTime  @default(now()) @map("requested_at") @db.Timestamptz(3)
+  status           String // REQUESTED | SCHEDULED | PASSED | FAILED | CANCELLED
+  scheduledFor     DateTime? @map("scheduled_for") @db.Timestamptz(3)
+  location         String?
+  scheduledBy      String?   @map("scheduled_by_staff_id") @db.Uuid
   checklist        Json?
   inspectorStaffId String?   @map("inspector_staff_id") @db.Uuid
   inspectedAt      DateTime? @map("inspected_at") @db.Timestamptz(3)
@@ -598,8 +606,8 @@ model Invoice {
   cityId        String    @map("city_id") @db.Uuid
   applicationId String    @map("application_id") @db.Uuid
   invoiceNo     String    @unique @map("invoice_no")
-  purpose       String // NEW_REGISTRATION
-  status        String // UNPAID | PAID | CANCELLED
+  purpose       String // NEW_REGISTRATION | FITNESS
+  status        String // UNPAID | PAID | CANCELLED | REFUNDED
   totalBdt      Int       @map("total_bdt")
   lines         Json
   createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
@@ -750,4 +758,27 @@ model IdempotencyKey {
 
   @@id([scope, key])
   @@map("idempotency_keys")
+}
+
+/// Refund of a successful payment, e.g. when a rejection becomes final (DSCC decision, 2026-11-02).
+/// Online (simulator) refunds complete at once; bank challan refunds stay PENDING until a revenue
+/// officer records the bank reference.
+model Refund {
+  id                String    @id @default(uuid(7)) @db.Uuid
+  cityId            String    @map("city_id") @db.Uuid
+  applicationId     String    @map("application_id") @db.Uuid
+  invoiceId         String    @map("invoice_id") @db.Uuid
+  paymentId         String    @unique @map("payment_id") @db.Uuid
+  method            String // ONLINE_SIMULATOR | COUNTER_CHALLAN
+  amountBdt         Int       @map("amount_bdt")
+  reason            String
+  status            String // PENDING | COMPLETED
+  providerRef       String?   @map("provider_ref")
+  completedByStaff  String?   @map("completed_by_staff_id") @db.Uuid
+  completedAt       DateTime? @map("completed_at") @db.Timestamptz(3)
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([cityId, status, createdAt])
+  @@index([applicationId])
+  @@map("refunds")
 }

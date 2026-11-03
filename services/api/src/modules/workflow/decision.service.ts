@@ -122,7 +122,8 @@ export class DecisionService {
     const checks = await tx.verificationCheck.findMany({ where: { applicationId: app.id }, orderBy: { createdAt: 'asc' } });
     const checklist = checklistComplete(checks.map((c) => ({ item: c.item, result: c.result, at: c.createdAt })));
     const openCorrection = await tx.correctionRequest.findFirst({ where: { applicationId: app.id, resolvedAt: null } });
-    const cert = await InspectionService.validCertificate(tx, app.id);
+    const fv = (app.formData as { vehicle?: { chassisNo?: string; motorNo?: string } }).vehicle;
+    const cert = await InspectionService.validCertificate(tx, app.id, dhakaToday(), fv?.chassisNo && fv?.motorNo ? { chassisNo: fv.chassisNo, motorNo: fv.motorNo } : undefined);
     const invoice = await tx.invoice.findFirst({ where: { applicationId: app.id, purpose: 'NEW_REGISTRATION', status: { not: 'CANCELLED' } } });
     let quotaOk = true;
     let zoneQuota: { quota: number; used: number } | null = null;
@@ -303,6 +304,9 @@ export class DecisionService {
       await this.quota.release(tx, { vehicleId: app.vehicleId, cityId: app.cityId, reason: `REJECTION_FINAL_${reason}`, actor });
     }
     await this.audit.record(tx, { cityId: app.cityId, actorType: actor.type, actorId: actor.id, action: 'application.rejection_final', entityType: 'application', entityId: app.id, data: { reason } });
+    // DSCC decision, 2026-11-02: when the rejection is final the fees paid are returned.
+    await tx.invoice.updateMany({ where: { applicationId: app.id, status: 'UNPAID' }, data: { status: 'CANCELLED' } });
+    await this.fees.refundApplication(tx, { cityId: app.cityId, applicationId: app.id, reason: `REJECTION_FINAL_${reason}`, actor });
   }
 
   /**
@@ -362,7 +366,7 @@ export class DecisionService {
         detail: g.detail,
         checks: checks.map((c) => ({ item: c.item, result: c.result, note: c.note, by: names.get(c.staffId) ?? null, at: c.createdAt })),
         corrections: corrections.map((c) => ({ id: c.id, items: c.items, message: c.message, at: c.createdAt, resolvedAt: c.resolvedAt })),
-        inspections: inspections.map(InspectionService.view),
+        inspections: inspections.map((i) => InspectionService.view(i)),
         invoice: invoice ? FeesService.view(invoice, invoice.payments) : null,
         decisions: decisions.map((d) => ({ decision: d.decision, reasons: d.reasonCodes, reasonText: d.reasonText, by: names.get(d.decidedBy) ?? null, at: d.decidedAt })),
         appeals: appeals.map((a) => ({ id: a.id, status: a.status, grounds: a.grounds, filedAt: a.filedAt, decidedAt: a.decidedAt, decisionNote: a.decisionNote })),
@@ -371,7 +375,6 @@ export class DecisionService {
           startVerification: has('application.verify') && app.status === 'SUBMITTED',
           check: has('application.verify') && app.status === 'UNDER_VERIFICATION',
           requestCorrection: has('application.verify') && app.status === 'UNDER_VERIFICATION',
-          scheduleInspection: has('inspection.schedule') && ['SUBMITTED', 'UNDER_VERIFICATION'].includes(app.status) && !inspections.some((i) => i.status === 'SCHEDULED') && !g.detail.fitnessCertificate,
           decide: has('application.decide') && app.status === 'UNDER_VERIFICATION' && g.gates.SEPARATION_OF_DUTIES,
           approve: has('application.decide') && g.unmet.length === 0,
         },
