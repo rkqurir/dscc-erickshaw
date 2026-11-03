@@ -31,7 +31,7 @@ export const PERMISSIONS = [
   { code: 'inspection.record', description: 'Record a Schedule 4 fitness inspection result as inspecting officer' },
   { code: 'inspection.countersign', description: 'Countersign a passed inspection as traffic officer (Rule 4(11)) and issue the certificate' },
   { code: 'payment.read', description: 'View invoices, payments and receipts' },
-  { code: 'payment.record', description: 'Record a bank/counter challan payment against an invoice' },
+  { code: 'payment.record', description: 'Record a bank/counter challan payment against an invoice, or the bank reference of a refund' },
   { code: 'fee.read', description: 'View the Schedule 2 fee table' },
   { code: 'registration.read', description: 'View approved applications awaiting plate/QR and issued registrations' },
   { code: 'registration.issue', description: 'Issue plate number and QR credential; revoke and reissue QR (step-up TOTP)' },

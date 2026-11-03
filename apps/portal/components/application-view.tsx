@@ -4,6 +4,7 @@ import { DefinitionList, ErrorAlert, Field, InvoiceSummary, Notice, PlateView, S
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { FormEvent, useState } from 'react';
+import { FitnessCard } from './fitness-card';
 import type { ApplicationDetail } from './types';
 
 export function ApplicationView({ app, onChange }: { app: ApplicationDetail; onChange: () => Promise<void> }) {
@@ -59,19 +60,7 @@ export function ApplicationView({ app, onChange }: { app: ApplicationDetail; onC
       {app.registration && <RegistrationCard reg={app.registration} />}
       {app.status === 'REJECTED' && app.decision && <RejectionCard app={app} onChange={onChange} />}
       {app.invoice && <FeeCard app={app} />}
-      {app.inspections.length > 0 && (
-        <div className="card">
-          <h2>{t('cit.inspectionTitle')}</h2>
-          <ul>
-            {app.inspections.map((i) => (
-              <li key={i.id}>
-                <span className={`badge badge-${i.status.toLowerCase()}`}>{tk(`inspection.${i.status}`)}</span> {t('cit.inspectionAt', { date: date(i.scheduledFor, true), place: i.location })}
-                {i.certificateNo && <div className="small">{t('wf.certificate', { no: i.certificateNo, date: date(i.validUntil) })}</div>}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
+      {(app.inspections.length > 0 || app.fitness.canRequest) && <FitnessCard app={app} onChange={onChange} />}
 
       <div className="card">
         <h2>{t('view.summary')}</h2>
@@ -134,7 +123,7 @@ function FeeCard({ app }: { app: ApplicationDetail }) {
   const payResult = params.get('payment');
   const canPay = inv.status === 'UNPAID' && ['SUBMITTED', 'UNDER_VERIFICATION', 'CORRECTION_REQUESTED'].includes(app.status);
   async function pay() {
-    const r = await a.run(() => api<{ gatewayUrl: string }>(`/applications/${app.id}/payments/checkout`, { method: 'POST' }));
+    const r = await a.run(() => api<{ gatewayUrl: string }>(`/applications/${app.id}/payments/checkout`, { method: 'POST', json: { invoiceId: inv.id } }));
     if (r) router.push(r.gatewayUrl);
   }
   return (
@@ -143,6 +132,13 @@ function FeeCard({ app }: { app: ApplicationDetail }) {
       {payResult === 'PAID' && inv.status === 'PAID' && <Notice kind="success">{tk('cit.payResult.PAID')}</Notice>}
       {payResult === 'FAILED' && inv.status !== 'PAID' && <Notice kind="warning">{tk('cit.payResult.FAILED')}</Notice>}
       <InvoiceSummary invoice={inv} />
+      {app.fitnessInvoices
+        .filter((f) => f.refunds.length > 0)
+        .map((f) => (
+          <div key={f.id} style={{ marginTop: '0.75rem' }}>
+            <InvoiceSummary invoice={f} />
+          </div>
+        ))}
       <ErrorAlert error={a.error} />
       {canPay && (
         <button type="button" className="btn" onClick={pay} disabled={a.busy}>

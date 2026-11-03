@@ -10,13 +10,16 @@ export function zoneFilter(s: StaffContext): string[] | null {
 
 export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** Load a submitted application the officer may see, optionally locking it; anything else is 404. */
-export async function loadStaffApplication(tx: Tx, s: StaffContext, id: string, lock = false) {
+/**
+ * Load a submitted application the officer may see, optionally locking it; anything else is 404.
+ * Drafts are visible only where asked for: fitness inspections are requested before submission.
+ */
+export async function loadStaffApplication(tx: Tx, s: StaffContext, id: string, lock = false, includeDrafts = false) {
   if (!UUID_RE.test(id)) throw notFound();
   if (lock) await tx.$queryRaw`SELECT id FROM applications WHERE id = ${id}::uuid FOR UPDATE`;
   const scope = zoneFilter(s);
   const app = await tx.application.findFirst({
-    where: { id, status: { not: 'DRAFT' }, deletedAt: null, ...(scope ? { zoneId: { in: scope } } : {}) },
+    where: { id, ...(includeDrafts ? {} : { status: { not: 'DRAFT' } }), deletedAt: null, ...(scope ? { zoneId: { in: scope } } : {}) },
   });
   if (!app) throw notFound();
   return app;

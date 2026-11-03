@@ -86,12 +86,14 @@ describe('identifiers', () => {
     expect(() => formatApplicationNumber('DSCC', 2026, 0)).toThrow();
     expect(() => formatApplicationNumber('DSCC', 2026, 1_000_000)).toThrow();
   });
-  it('formats plate system IDs as DSCC-Z1-2324 and Bengali plates per Schedule 3', () => {
-    expect(formatPlateSystemId('DSCC', 'Z1', 2324)).toBe('DSCC-Z1-2324');
-    expect(formatPlateSystemId('DSCC', 'Z4', 7)).toBe('DSCC-Z4-0007');
-    expect(parsePlateSystemId('DSCC-Z3-0042')).toEqual({ cityCode: 'DSCC', zoneCode: 'Z3', serial: 42 });
-    expect(formatPlateBengali('ঢাকা দক্ষিণ', 'ক', 2324)).toBe('ঢাকা দক্ষিণ-ক-২৩২৪');
-    expect(() => formatPlateSystemId('DSCC', 'Z1', 10_000)).toThrow();
+  it('formats six-digit plate system IDs (DSCC-Z1-000001) and Bengali plates per Schedule 3', () => {
+    expect(formatPlateSystemId('DSCC', 'Z1', 1)).toBe('DSCC-Z1-000001');
+    expect(formatPlateSystemId('DSCC', 'Z4', 2324)).toBe('DSCC-Z4-002324');
+    expect(formatPlateSystemId('DSCC', 'Z2', 999_999)).toBe('DSCC-Z2-999999');
+    expect(parsePlateSystemId('DSCC-Z3-000042')).toEqual({ cityCode: 'DSCC', zoneCode: 'Z3', serial: 42 });
+    expect(parsePlateSystemId('DSCC-Z3-0042')).toBeNull();
+    expect(formatPlateBengali('ঢাকা দক্ষিণ', 'ক', 1)).toBe('ঢাকা দক্ষিণ-ক-০০০০০১');
+    expect(() => formatPlateSystemId('DSCC', 'Z1', 1_000_000)).toThrow();
   });
 });
 

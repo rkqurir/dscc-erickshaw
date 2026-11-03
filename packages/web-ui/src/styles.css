@@ -146,11 +146,11 @@ footer.site { max-width: 1100px; margin: 2rem auto 1rem; padding: 0 1rem; color:
 
 /* Phase 2 */
 input[type='datetime-local'] { width: 100%; min-height: 44px; padding: 0.5rem 0.65rem; font: inherit; border: 1px solid #8a96a0; border-radius: 8px; background: #fff; color: var(--ink); }
-.badge-under_verification, .badge-scheduled, .badge-pending, .badge-unpaid { background: var(--warn-bg); color: var(--warn); }
+.badge-under_verification, .badge-scheduled, .badge-requested, .badge-pending, .badge-unpaid { background: var(--warn-bg); color: var(--warn); }
 .badge-correction_requested { background: #fde7d9; color: #8a3b00; }
 .badge-passed, .badge-paid, .badge-active, .badge-allowed, .badge-valid { background: var(--ok-bg); color: var(--ok); }
 .badge-failed, .badge-dismissed, .badge-revoked, .badge-invalid, .badge-unknown, .badge-expired { background: var(--danger-bg); color: var(--danger); }
-.badge-cancelled { background: #f1f1f1; color: #5f6368; }
+.badge-cancelled, .badge-refunded { background: #f1f1f1; color: #5f6368; }
 .gates { list-style: none; padding: 0; margin: 0 0 0.5rem; }
 .gates li { display: flex; gap: 0.5rem; align-items: flex-start; padding: 0.3rem 0; border-bottom: 1px dashed var(--line); }
 .gates .mark { font-weight: 700; width: 1.4rem; flex: none; text-align: center; }

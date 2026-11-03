@@ -1,10 +1,11 @@
 import AxeBuilder from '@axe-core/playwright';
 import { Browser, Page, expect, test } from '@playwright/test';
-import { ADMIN, CSRF, PNG, PORTAL, acceptConsent, citizenLogin, createSubmittedApplication, freshTotp, registerOwnerViaApi, staffLogin } from './helpers';
+import { ADMIN, CSRF, PNG, PORTAL, acceptConsent, citizenLogin, createReadyDraft, createSubmittedApplication, freshTotp, registerOwnerViaApi, staffLogin } from './helpers';
 
 /**
- * Phase 2 end to end: fee payment through the simulated gateway, verification checklist, fitness inspection
- * with countersignature, approval with step-up TOTP, plate and QR issue, public QR verification, correction
+ * Phase 2 end to end: the fitness inspection requested and paid from the draft, scheduled, inspected and
+ * countersigned before submission (DSCC decision, 2026-11-02), registration fee payment through the simulated
+ * gateway, verification checklist, approval with step-up TOTP, plate and QR issue, public QR verification, correction
  * request and resubmission, rejection with written reasons and the Rule 4(7) appeal. Every step is done by
  * a different officer, as separation of duties requires.
  */
@@ -22,6 +23,7 @@ const TOTP_LABEL = /নিশ্চিতকরণ কোড/;
 test.describe.serial('Phase 2 workflow: verification, inspection, payment, decision, plate/QR and appeal', () => {
   const pages = new Map<string, Page>();
   let citizen: Page;
+  let draft: { id: string; chassisNo: string };
   let app: { id: string; applicationNumber: string };
   let app2: { id: string; applicationNumber: string };
 
@@ -41,7 +43,7 @@ test.describe.serial('Phase 2 workflow: verification, inspection, payment, decis
     await citizenLogin(citizen);
     await acceptConsent(citizen);
     await registerOwnerViaApi(citizen);
-    app = await createSubmittedApplication(citizen);
+    draft = await createReadyDraft(citizen);
     app2 = await createSubmittedApplication(citizen);
   });
 
@@ -49,22 +51,29 @@ test.describe.serial('Phase 2 workflow: verification, inspection, payment, decis
     for (const p of [citizen, ...pages.values()]) await p.context().close();
   });
 
-  test('citizen pays the Schedule 2 fees through the simulated gateway and receives a receipt', async () => {
-    await citizen.goto(`${PORTAL}/applications/${app.id}`);
-    const fee = citizen.getByTestId('fee-card');
-    await expect(fee).toContainText('নিবন্ধন ফি');
-    await expect(fee).toContainText('ফিটনেস সনদ ফি');
-    await fee.getByRole('button', { name: 'অনলাইনে ফি পরিশোধ করুন' }).click();
+  test('citizen requests a fitness inspection from the draft and pays the fitness fee', async () => {
+    await citizen.goto(`${PORTAL}/applications/${draft.id}`);
+    const card = citizen.getByTestId('fitness-card');
+    await expect(card).toContainText('আবেদন জমা দেওয়ার আগে ফিটনেস সনদ লাগবে।');
+    await card.getByRole('button', { name: 'ফিটনেস পরিদর্শনের আবেদন করুন' }).click();
+    await expect(card.getByTestId('fitness-open')).toContainText('আবেদিত');
+    await expect(card).toContainText('ফিটনেস সনদ ফি');
+    await expect(card).toContainText('পরিদর্শনের আবেদন হয়েছে। ফি পরিশোধের পর সময় দেওয়া হবে।');
+    // The inspected rickshaw's chassis number can no longer change.
+    await expect(citizen.getByLabel('চেসিস নম্বর')).toBeDisabled();
+    await card.getByRole('button', { name: 'ফিটনেস ফি পরিশোধ করুন' }).click();
 
     await expect(citizen).toHaveURL(/\/pay\/sim\//);
     await expect(citizen.getByRole('heading', { name: 'পেমেন্ট গেটওয়ে (ডেমো সিমুলেটর)' })).toBeVisible();
     await expect(citizen.getByText('এটি প্রকৃত পেমেন্ট নয়।', { exact: false })).toBeVisible();
     await citizen.getByRole('button', { name: 'সফল পেমেন্ট সিমুলেট করুন' }).click();
 
-    await expect(citizen).toHaveURL(new RegExp(`/applications/${app.id}\\?payment=PAID`));
-    await expect(citizen.getByText('পেমেন্ট সফল হয়েছে।')).toBeVisible();
-    await expect(citizen.getByTestId('fee-card')).toContainText(/RCP-DSCC-\d{4}-\d{6}/);
-    await expect(citizen.getByRole('button', { name: 'অনলাইনে ফি পরিশোধ করুন' })).toHaveCount(0);
+    await expect(citizen).toHaveURL(new RegExp(`/applications/${draft.id}\\?payment=PAID`));
+    const paid = citizen.getByTestId('fitness-card');
+    await expect(paid).toContainText('পেমেন্ট সফল হয়েছে।');
+    await expect(paid).toContainText('ফি পরিশোধিত। পরিদর্শনের সময় ও স্থান জানানো হবে।');
+    await expect(paid).toContainText(/RCP-DSCC-\d{4}-\d{6}/);
+    await expect(paid.getByRole('button', { name: 'ফিটনেস ফি পরিশোধ করুন' })).toHaveCount(0);
 
     // A forged gateway callback (bad signature) is refused.
     const forged = await citizen.request.post(`${PORTAL}/api/v1/payments/webhook/simulator`, {
@@ -74,7 +83,72 @@ test.describe.serial('Phase 2 workflow: verification, inspection, payment, decis
     expect(forged.status()).toBeGreaterThanOrEqual(400);
   });
 
-  test('verification officer checks the file and schedules a fitness inspection', async ({ browser }) => {
+  test('verification officer gives the paid request an inspection appointment', async ({ browser }) => {
+    const v = await as(browser, 'verifier@dscc.test');
+    await v.goto(`${ADMIN}/inspections`);
+    // A scheduler's queue opens on requests waiting for an appointment.
+    await expect(v.getByRole('button', { name: 'আবেদিত' })).toHaveAttribute('aria-pressed', 'true');
+    const card = v.getByTestId('inspection').filter({ hasText: draft.chassisNo });
+    await expect(card).toContainText('খসড়া আবেদন (জমার আগে)');
+    await expect(card.getByTestId('inspection-fee')).toContainText('পরিশোধিত');
+    const tomorrow = new Date(Date.now() + 86_400_000 + 6 * 3_600_000).toISOString().slice(0, 10);
+    await card.locator('input[type="datetime-local"]').fill(`${tomorrow}T10:30`);
+    await card.getByRole('textbox', { name: 'স্থান', exact: true }).fill('DSCC অঞ্চল-২ ফিটনেস ইয়ার্ড, ধানমন্ডি');
+    await card.getByRole('button', { name: 'পরিদর্শনের সময় নির্ধারণ' }).click();
+    await expect(v.getByTestId('inspection-flash')).toHaveText(`চেসিস নম্বর ${draft.chassisNo}: পরিদর্শন নির্ধারিত হয়েছে।`);
+
+    const axe = await new AxeBuilder({ page: v }).withTags(['wcag2a', 'wcag2aa']).analyze();
+    expect(axe.violations.filter((x) => x.impact === 'serious' || x.impact === 'critical')).toEqual([]);
+
+    await citizen.goto(`${PORTAL}/applications/${draft.id}`);
+    await expect(citizen.getByTestId('fitness-appointment')).toContainText('DSCC অঞ্চল-২ ফিটনেস ইয়ার্ড, ধানমন্ডি');
+  });
+
+  test('inspection officer records Schedule 4 results; a different traffic officer countersigns the certificate', async ({ browser }) => {
+    const i = await as(browser, 'inspector@dscc.test');
+    await i.goto(`${ADMIN}/inspections`);
+    const card = i.getByTestId('inspection').filter({ hasText: draft.chassisNo });
+    await card.getByText('ফলাফল লিখুন').click();
+    for (const label of FIT_LABELS) await card.getByRole('group', { name: label }).getByLabel('উত্তীর্ণ').check();
+    await card.getByRole('button', { name: 'ফলাফল সংরক্ষণ' }).click();
+    await expect(i.getByTestId('inspection-flash')).toHaveText(`চেসিস নম্বর ${draft.chassisNo}: পরিদর্শনের ফলাফল সংরক্ষিত। (উত্তীর্ণ)`);
+    await i.getByRole('group', { name: 'অবস্থা' }).getByRole('button', { name: 'উত্তীর্ণ' }).click();
+    const passed = i.getByTestId('inspection').filter({ hasText: draft.chassisNo });
+    await expect(passed).toContainText('ট্রাফিক বিভাগের প্রতিস্বাক্ষরের অপেক্ষায়');
+
+    // The countersigner's queue opens on passed inspections.
+    const tr = await as(browser, 'traffic@dscc.test');
+    await tr.goto(`${ADMIN}/inspections`);
+    const card2 = tr.getByTestId('inspection').filter({ hasText: draft.chassisNo });
+    await card2.getByRole('button', { name: 'প্রতিস্বাক্ষর করে সনদ ইস্যু' }).click();
+    await expect(tr.getByTestId('inspection-flash')).toContainText(/সনদ ইস্যু হয়েছে: FIT-DSCC-\d{4}-\d{6}/);
+    await expect(card2).toContainText(/ফিটনেস সনদ FIT-DSCC-\d{4}-\d{6}/);
+  });
+
+  test('citizen submits once the certificate is issued and pays the registration fee', async () => {
+    await citizen.goto(`${PORTAL}/applications/${draft.id}`);
+    await expect(citizen.getByTestId('fitness-certificate')).toContainText(/সনদ FIT-DSCC-\d{4}-\d{6}, মেয়াদ/);
+    await citizen.getByRole('button', { name: /যাচাই ও জমা/ }).click();
+    await expect(citizen.getByLabel(/আমি ঘোষণা করছি/)).toBeChecked();
+    await citizen.getByRole('button', { name: 'আবেদন জমা দিন' }).click();
+    await expect(citizen.getByRole('heading', { name: 'আবেদন সফলভাবে জমা হয়েছে' })).toBeVisible();
+    const applicationNumber = await citizen.getByTestId('application-number').innerText();
+    expect(applicationNumber).toMatch(/^DSCC-20\d{2}-\d{6}$/);
+    app = { id: draft.id, applicationNumber };
+
+    const fee = citizen.getByTestId('fee-card');
+    await expect(fee).toContainText('নিবন্ধন ফি');
+    await expect(fee).not.toContainText('ফিটনেস সনদ ফি'); // paid with the inspection request
+    await fee.getByRole('button', { name: 'অনলাইনে ফি পরিশোধ করুন' }).click();
+    await expect(citizen).toHaveURL(/\/pay\/sim\//);
+    await citizen.getByRole('button', { name: 'সফল পেমেন্ট সিমুলেট করুন' }).click();
+    await expect(citizen).toHaveURL(new RegExp(`/applications/${app.id}\\?payment=PAID`));
+    await expect(citizen.getByTestId('fee-card')).toContainText('পেমেন্ট সফল হয়েছে।');
+    await expect(citizen.getByTestId('fee-card')).toContainText(/RCP-DSCC-\d{4}-\d{6}/);
+    await expect(citizen.getByRole('button', { name: 'অনলাইনে ফি পরিশোধ করুন' })).toHaveCount(0);
+  });
+
+  test('verification officer checks the file', async ({ browser }) => {
     const v = await as(browser, 'verifier@dscc.test');
     await v.goto(`${ADMIN}/applications/${app.id}`);
     const wf = v.getByTestId('workflow');
@@ -87,36 +161,9 @@ test.describe.serial('Phase 2 workflow: verification, inspection, payment, decis
     // The verifier may not decide on a file they verified.
     await expect(wf.getByText('আপনি এই আবেদনের যাচাইকারী, তাই সিদ্ধান্ত দিতে পারবেন না (দায়িত্ব বিভাজন)।')).toBeVisible();
     await expect(wf.getByRole('button', { name: 'অনুমোদন করুন' })).toHaveCount(0);
-
-    const tomorrow = new Date(Date.now() + 86_400_000 + 6 * 3_600_000).toISOString().slice(0, 10);
-    await wf.locator('input[type="datetime-local"]').fill(`${tomorrow}T10:30`);
-    await wf.getByRole('textbox', { name: 'স্থান', exact: true }).fill('DSCC অঞ্চল-২ ফিটনেস ইয়ার্ড, ধানমন্ডি');
-    await wf.getByRole('button', { name: 'পরিদর্শনের সময় নির্ধারণ' }).click();
-    await expect(wf).toContainText('DSCC অঞ্চল-২ ফিটনেস ইয়ার্ড, ধানমন্ডি');
-
-    const axe = await new AxeBuilder({ page: v }).withTags(['wcag2a', 'wcag2aa']).analyze();
-    expect(axe.violations.filter((x) => x.impact === 'serious' || x.impact === 'critical')).toEqual([]);
-  });
-
-  test('inspection officer records Schedule 4 results; a different traffic officer countersigns the certificate', async ({ browser }) => {
-    const i = await as(browser, 'inspector@dscc.test');
-    await i.goto(`${ADMIN}/inspections`);
-    const card = i.getByTestId('inspection').filter({ hasText: app.applicationNumber });
-    await card.getByText('ফলাফল লিখুন').click();
-    for (const label of FIT_LABELS) await card.getByRole('group', { name: label }).getByLabel('উত্তীর্ণ').check();
-    await card.getByRole('button', { name: 'ফলাফল সংরক্ষণ' }).click();
-    await expect(i.getByTestId('inspection-flash')).toHaveText(`${app.applicationNumber}: পরিদর্শনের ফলাফল সংরক্ষিত। (উত্তীর্ণ)`);
-    await i.getByRole('group', { name: 'অবস্থা' }).getByRole('button', { name: 'উত্তীর্ণ' }).click();
-    const passed = i.getByTestId('inspection').filter({ hasText: app.applicationNumber });
-    await expect(passed).toContainText('ট্রাফিক বিভাগের প্রতিস্বাক্ষরের অপেক্ষায়');
-
-    // The countersigner's queue opens on passed inspections.
-    const tr = await as(browser, 'traffic@dscc.test');
-    await tr.goto(`${ADMIN}/inspections`);
-    const card2 = tr.getByTestId('inspection').filter({ hasText: app.applicationNumber });
-    await card2.getByRole('button', { name: 'প্রতিস্বাক্ষর করে সনদ ইস্যু' }).click();
-    await expect(tr.getByTestId('inspection-flash')).toContainText(/সনদ ইস্যু হয়েছে: FIT-DSCC-\d{4}-\d{6}/);
-    await expect(card2).toContainText(/ফিটনেস সনদ FIT-DSCC-\d{4}-\d{6}/);
+    // The fitness inspection done before submission is part of the file.
+    await expect(wf).toContainText(`চেসিস নম্বর: ${draft.chassisNo}`);
+    await expect(wf).toContainText(/ফিটনেস সনদ FIT-DSCC-\d{4}-\d{6}/);
   });
 
   test('approving officer sees every gate met and approves with a step-up code', async ({ browser }) => {
@@ -144,14 +191,14 @@ test.describe.serial('Phase 2 workflow: verification, inspection, payment, decis
     const card = p.getByTestId('registration-card').filter({ hasText: app.applicationNumber });
     await card.getByLabel(TOTP_LABEL).fill(await freshTotp('plate@dscc.test'));
     await card.getByRole('button', { name: 'প্লেট ও QR ইস্যু করুন' }).click();
-    await expect(card).toContainText(/ইস্যু হয়েছে: ঢাকা দক্ষিণ-খ-[০-৯]{4}/);
-    await expect(card).toContainText(/DSCC-Z2-\d{4}/);
+    await expect(card).toContainText(/ইস্যু হয়েছে: ঢাকা দক্ষিণ-খ-[০-৯]{6}/);
+    await expect(card).toContainText(/DSCC-Z2-\d{6}/);
     await expect(card.getByRole('img', { name: /QR কোড \(সংস্করণ/ })).toBeVisible();
 
     await citizen.goto(`${PORTAL}/applications/${app.id}`);
     const reg = citizen.getByTestId('registration');
     await expect(reg).toContainText('নিবন্ধন সম্পন্ন: নম্বর প্লেট ও QR কোড');
-    await expect(reg.getByRole("img", { name: /^ঢাকা দক্ষিণ-খ-[০-৯]{4} \(DSCC-Z2-\d{4}\)$/ })).toBeVisible();
+    await expect(reg.getByRole("img", { name: /^ঢাকা দক্ষিণ-খ-[০-৯]{6} \(DSCC-Z2-\d{6}\)$/ })).toBeVisible();
     await expect(reg.getByRole('img', { name: /QR কোড/ })).toBeVisible();
     const href = await reg.getByRole('link', { name: 'যাচাই পাতা খুলুন' }).getAttribute('href');
     expect(href).toMatch(/^\/v\/Q1\.DSCC\./);
@@ -160,7 +207,7 @@ test.describe.serial('Phase 2 workflow: verification, inspection, payment, decis
     const anon = await (await browser.newContext({ locale: 'bn-BD' })).newPage();
     await anon.goto(`${PORTAL}${href}`);
     await expect(anon.getByTestId('verify-result')).toContainText('বৈধ নিবন্ধন');
-    await expect(anon.getByText(/DSCC-Z2-\d{4}/)).toBeVisible();
+    await expect(anon.getByText(/DSCC-Z2-\d{6}/)).toBeVisible();
     await expect(anon.getByText(/পর্যন্ত বৈধ/)).toBeVisible();
     const body = await anon.locator('body').innerText();
     expect(body).not.toContain('জাহিদ হাসান');

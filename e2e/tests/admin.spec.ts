@@ -50,8 +50,8 @@ test.describe.serial('DSCC admin dashboard', () => {
     await expect(page.getByRole('heading', { name: 'আবেদন ক্যু' })).toBeVisible();
     await page.getByRole('link', { name: 'জোন কনফিগারেশন' }).click();
     const z1 = page.getByTestId('zone-Z1');
-    await expect(z1.getByRole('img', { name: 'ঢাকা দক্ষিণ-ক-২৩২৪' })).toBeVisible();
-    await expect(z1.getByText('DSCC-Z1-2324')).toBeVisible();
+    await expect(z1.getByRole('img', { name: 'ঢাকা দক্ষিণ-ক-০০০০০১' })).toBeVisible();
+    await expect(z1.getByText('DSCC-Z1-000001')).toBeVisible();
     const z3 = page.getByTestId('zone-Z3');
     await expect(z3.getByTestId('contrast-warning')).toBeVisible();
 

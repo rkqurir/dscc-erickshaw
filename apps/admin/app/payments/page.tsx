@@ -13,8 +13,10 @@ interface InvoiceRow {
   totalBdt: number;
   lines: { service: string; amountBdt: number; legalRef: string }[];
   payments: { method: string; reference: string; amountBdt: number; status: string; receiptNo: string | null; at: string }[];
+  refunds: { id: string; method: string; amountBdt: number; status: string; reference: string | null; createdAt: string; completedAt: string | null }[];
+  purpose: string;
   createdAt: string;
-  application: { id: string; applicationNumber: string; status: string } | null;
+  application: { id: string; applicationNumber: string | null; status: string; label: string } | null;
   owner: { nameBn: string; nidMasked: string } | null;
 }
 interface Fee {
@@ -27,7 +29,25 @@ interface Fee {
   legalRef: string;
 }
 
-const FILTERS = ['UNPAID', 'PAID', 'CANCELLED'] as const;
+interface RefundRow {
+  id: string;
+  method: string;
+  amountBdt: number;
+  status: string;
+  reason: string;
+  reference: string | null;
+  createdAt: string;
+  completedAt: string | null;
+  invoiceNo: string | null;
+  paidReference: string | null;
+  receiptNo: string | null;
+  application: { id: string; applicationNumber: string | null; status: string; label: string } | null;
+  owner: { nameBn: string; nidMasked: string } | null;
+}
+
+const FILTERS = ['UNPAID', 'PAID', 'REFUNDED', 'CANCELLED'] as const;
+/** Pseudo-filter: challan refunds waiting for the bank reference. */
+const REFUNDS = 'REFUNDS';
 
 export default function Payments() {
   const me = useRequireStaff('payment.read');
@@ -37,6 +57,7 @@ export default function Payments() {
   const [fees, setFees] = useState<Fee[] | null>(null);
   const [error, setError] = useState<unknown>(null);
   const load = useCallback(async () => {
+    if (status === REFUNDS) return;
     try {
       setRows(await api<InvoiceRow[]>(`/admin/invoices?status=${status}`));
     } catch (e) {
@@ -84,9 +105,14 @@ export default function Payments() {
             {tk(`invoice.${f}`)}
           </button>
         ))}
+        <button type="button" className={status === REFUNDS ? 'btn' : 'btn btn-secondary'} aria-pressed={status === REFUNDS} onClick={() => setStatus(REFUNDS)}>
+          {t('refund.queue')}
+        </button>
       </div>
       <ErrorAlert error={error} />
-      {!rows ? (
+      {status === REFUNDS ? (
+        <Refunds canRecord={me.permissions.includes('payment.record')} canOpen={me.permissions.includes('application.read')} />
+      ) : !rows ? (
         <Spinner />
       ) : rows.length === 0 ? (
         <p className="muted">{t('pay.empty')}</p>
@@ -94,7 +120,12 @@ export default function Payments() {
         rows.map((r) => (
           <article className="card" key={r.id} data-testid="invoice">
             <h2 style={{ marginTop: 0 }}>
-              {r.application && me.permissions.includes('application.read') ? <Link href={`/applications/${r.application.id}`}>{r.application.applicationNumber}</Link> : r.application?.applicationNumber}
+              {r.application && r.application.applicationNumber && me.permissions.includes('application.read') ? (
+                <Link href={`/applications/${r.application.id}`}>{r.application.applicationNumber}</Link>
+              ) : (
+                r.application?.label
+              )}
+              <span className="muted small"> · {tk(`purpose.${r.purpose}`)}</span>
               {r.owner && (
                 <span className="muted small">
                   {' '}
@@ -154,5 +185,78 @@ function ChallanForm({ invoice, onDone }: { invoice: InvoiceRow; onDone: () => P
         </button>
       </form>
     </details>
+  );
+}
+
+function Refunds({ canRecord, canOpen }: { canRecord: boolean; canOpen: boolean }) {
+  const { t, tk, num, date } = useI18n();
+  const [rows, setRows] = useState<RefundRow[] | null>(null);
+  const [error, setError] = useState<unknown>(null);
+  const load = useCallback(async () => {
+    try {
+      setRows(await api<RefundRow[]>('/admin/refunds'));
+    } catch (e) {
+      setError(e);
+    }
+  }, []);
+  useEffect(() => {
+    void load();
+  }, [load]);
+  return (
+    <>
+      <Notice>{t('refund.note')}</Notice>
+      <ErrorAlert error={error} />
+      {!rows ? (
+        <Spinner />
+      ) : rows.length === 0 ? (
+        <p className="muted">{t('refund.empty')}</p>
+      ) : (
+        rows.map((r) => (
+          <article className="card" key={r.id} data-testid="refund-row">
+            <h2 style={{ marginTop: 0 }}>
+              {r.application && r.application.applicationNumber && canOpen ? <Link href={`/applications/${r.application.id}`}>{r.application.applicationNumber}</Link> : r.application?.label}{' '}
+              <span className={`badge badge-${r.status === 'COMPLETED' ? 'paid' : 'pending'}`}>{tk(`refund.${r.status}`)}</span>
+              {r.owner && (
+                <span className="muted small">
+                  {' '}
+                  · {r.owner.nameBn} · NID {r.owner.nidMasked}
+                </span>
+              )}
+            </h2>
+            <p>
+              {t('refund.line', { amount: num(r.amountBdt) })} · {tk(`method.${r.method}`)} · {t('invoice.number', { no: r.invoiceNo ?? '' })} · {t('invoice.receipt', { no: r.receiptNo ?? '' })} ({r.paidReference})
+            </p>
+            <p className="small muted">{date(r.createdAt, true)}</p>
+            {r.reference && <p className="small">{t('refund.reference', { ref: r.reference })} · {date(r.completedAt, true)}</p>}
+            {r.status === 'PENDING' && canRecord && <RefundForm id={r.id} onDone={load} />}
+          </article>
+        ))
+      )}
+    </>
+  );
+}
+
+/** One revenue officer records the bank reference; no second approval (DSCC decision, 2026-11-02). */
+function RefundForm({ id, onDone }: { id: string; onDone: () => Promise<void> }) {
+  const { t } = useI18n();
+  const a = useAction();
+  const [reference, setReference] = useState('');
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    await a.run(async () => {
+      await api(`/admin/refunds/${id}/complete`, { method: 'POST', json: { reference } });
+      await onDone();
+    });
+  }
+  return (
+    <form onSubmit={submit}>
+      <Field label={t('refund.bankRef')} error={a.fields.reference} required>
+        {(p) => <input {...p} type="text" value={reference} onChange={(e) => setReference(e.target.value)} />}
+      </Field>
+      <ErrorAlert error={a.error} />
+      <button className="btn" disabled={a.busy}>
+        {t('refund.complete')}
+      </button>
+    </form>
   );
 }

@@ -9,20 +9,22 @@ import { useRequireStaff } from '../../components/session';
 interface Row {
   id: string;
   status: string;
-  scheduledFor: string;
-  location: string;
+  requestedAt: string;
+  scheduledFor: string | null;
+  location: string | null;
+  invoice: { id: string; invoiceNo: string; status: string; totalBdt: number } | null;
   checklist: Record<string, 'PASS' | 'FAIL'> | null;
   inspectorNote: string | null;
   countersigned: boolean;
   certificateNo: string | null;
   validUntil: string | null;
   inspectedByMe: boolean;
-  application: { id: string; applicationNumber: string; status: string };
-  vehicle: { seatType: string; chassisNo: string; motorNo: string; model: string | null; hasSpeedometer: boolean } | null;
+  application: { id: string; applicationNumber: string | null; status: string };
+  vehicle: { seatType: string; chassisNo: string; motorNo: string; model: string | null; hasSpeedometer: boolean | null };
   zone: { code: string; nameBn: string; nameEn: string; uiColour: string } | null;
 }
 
-const FILTERS = ['SCHEDULED', 'PASSED', 'FAILED', 'CANCELLED'] as const;
+const FILTERS = ['REQUESTED', 'SCHEDULED', 'PASSED', 'FAILED', 'CANCELLED'] as const;
 
 export default function Inspections() {
   const me = useRequireStaff('inspection.read');
@@ -31,9 +33,12 @@ export default function Inspections() {
   const [rows, setRows] = useState<Row[] | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [flash, setFlash] = useState<string | null>(null);
-  // Countersigning officers start on passed inspections (their work queue); everyone else on scheduled ones.
+  // Each officer starts on their own work queue: countersigners on passed inspections, schedulers on
+  // paid requests waiting for an appointment, inspectors on scheduled ones.
   useEffect(() => {
-    if (me && status === null) setStatus(me.permissions.includes('inspection.countersign') && !me.permissions.includes('inspection.record') ? 'PASSED' : 'SCHEDULED');
+    if (!me || status !== null) return;
+    const has = (p: string) => me.permissions.includes(p);
+    setStatus(has('inspection.record') ? 'SCHEDULED' : has('inspection.countersign') ? 'PASSED' : has('inspection.schedule') ? 'REQUESTED' : 'SCHEDULED');
   }, [me, status]);
   const load = useCallback(async () => {
     if (!status) return;
@@ -85,17 +90,28 @@ export default function Inspections() {
           <article className="card" key={r.id} data-testid="inspection">
             <div className="row spread">
               <h2 style={{ margin: 0 }}>
-                {can('application.read') ? <Link href={`/applications/${r.application.id}`}>{r.application.applicationNumber}</Link> : r.application.applicationNumber}{' '}
+                {r.application.applicationNumber ? (
+                  can('application.read') ? <Link href={`/applications/${r.application.id}`}>{r.application.applicationNumber}</Link> : r.application.applicationNumber
+                ) : (
+                  t('insp.draftApplication')
+                )}{' '}
                 <span className={`badge badge-${r.status.toLowerCase()}`}>{tk(`inspection.${r.status}`)}</span>
               </h2>
               <ZoneChip zone={r.zone} />
             </div>
-            <p>
-              {date(r.scheduledFor, true)} · {r.location}
+            {r.scheduledFor ? (
+              <p>
+                {date(r.scheduledFor, true)} · {r.location}
+              </p>
+            ) : (
+              <p className="small muted">{t('insp.requestedAt', { date: date(r.requestedAt, true) })}</p>
+            )}
+            <p className="small">
+              {tk(`seat.${r.vehicle.seatType}`)} · {r.vehicle.model} · {t('vehicle.chassis')}: {r.vehicle.chassisNo} · {t('vehicle.motor')}: {r.vehicle.motorNo}
             </p>
-            {r.vehicle && (
-              <p className="small">
-                {tk(`seat.${r.vehicle.seatType}`)} · {r.vehicle.model} · {t('vehicle.chassis')}: {r.vehicle.chassisNo} · {t('vehicle.motor')}: {r.vehicle.motorNo}
+            {r.invoice && (
+              <p className="small" data-testid="inspection-fee">
+                {t('insp.fee', { no: r.invoice.invoiceNo })} <span className={`badge badge-${r.invoice.status.toLowerCase()}`}>{tk(`invoice.${r.invoice.status}`)}</span>
               </p>
             )}
             {r.checklist && (
@@ -110,6 +126,7 @@ export default function Inspections() {
             )}
             {r.inspectorNote && <p className="small">{r.inspectorNote}</p>}
             {r.certificateNo && <Notice kind="success">{t('wf.certificate', { no: r.certificateNo, date: date(r.validUntil) })}</Notice>}
+            {r.status === 'REQUESTED' && can('inspection.schedule') && (r.invoice && r.invoice.status !== 'PAID' ? <p className="muted small">{t('insp.awaitingFee')}</p> : <ScheduleForm row={r} onDone={done} />)}
             {r.status === 'SCHEDULED' && can('inspection.record') && <ResultForm row={r} onDone={done} />}
             {r.status === 'SCHEDULED' && can('inspection.schedule') && <CancelButton id={r.id} onDone={load} />}
             {r.status === 'PASSED' && !r.countersigned && can('inspection.countersign') && <Countersign row={r} onDone={done} />}
@@ -118,6 +135,44 @@ export default function Inspections() {
         ))
       )}
     </>
+  );
+}
+
+function rowLabel(row: Row, t: ReturnType<typeof useI18n>['t']): string {
+  return row.application.applicationNumber ?? `${t('vehicle.chassis')} ${row.vehicle.chassisNo}`;
+}
+
+/** Give a paid request its appointment (Dhaka time). */
+function ScheduleForm({ row, onDone }: { row: Row; onDone: (msg: string) => Promise<void> }) {
+  const { t } = useI18n();
+  const a = useAction();
+  const [when, setWhen] = useState('');
+  const [where, setWhere] = useState('');
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    await a.run(async () => {
+      // datetime-local has no zone; officers schedule in Dhaka time (UTC+6).
+      const scheduledFor = when ? new Date(`${when}:00+06:00`).toISOString() : '';
+      await api(`/admin/inspections/${row.id}/schedule`, { method: 'POST', json: { scheduledFor, location: where } });
+      await onDone(`${rowLabel(row, t)}: ${t('wf.inspectionScheduled')}`);
+    });
+  }
+  return (
+    <form onSubmit={submit} className="card" data-testid="schedule-form">
+      <h3>{t('wf.inspectionSchedule')}</h3>
+      <div className="grid2">
+        <Field label={t('wf.inspectionWhen')} error={a.fields.scheduledFor} required>
+          {(p) => <input {...p} type="datetime-local" value={when} onChange={(e) => setWhen(e.target.value)} />}
+        </Field>
+        <Field label={t('wf.inspectionWhere')} error={a.fields.location} required>
+          {(p) => <input {...p} type="text" value={where} onChange={(e) => setWhere(e.target.value)} />}
+        </Field>
+      </div>
+      <ErrorAlert error={a.error} />
+      <button className="btn" disabled={a.busy}>
+        {t('wf.inspectionSchedule')}
+      </button>
+    </form>
   );
 }
 
@@ -130,7 +185,7 @@ function ResultForm({ row, onDone }: { row: Row; onDone: (msg: string) => Promis
     e.preventDefault();
     await a.run(async () => {
       const r = await api<{ status: string }>(`/admin/inspections/${row.id}/result`, { method: 'POST', json: { checklist, note: note || undefined } });
-      await onDone(`${row.application.applicationNumber}: ${t('insp.saved')} (${tk(`inspection.${r.status}`)})`);
+      await onDone(`${rowLabel(row, t)}: ${t('insp.saved')} (${tk(`inspection.${r.status}`)})`);
     });
   }
   return (
@@ -176,7 +231,7 @@ function Countersign({ row, onDone }: { row: Row; onDone: (msg: string) => Promi
         onClick={() =>
           a.run(async () => {
             const r = await api<{ certificateNo: string }>(`/admin/inspections/${row.id}/countersign`, { method: 'POST' });
-            await onDone(`${row.application.applicationNumber}: ${t('insp.signed', { no: r.certificateNo })}`);
+            await onDone(`${rowLabel(row, t)}: ${t('insp.signed', { no: r.certificateNo })}`);
           })
         }
       >

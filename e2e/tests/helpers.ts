@@ -1,6 +1,7 @@
 import { APIRequestContext, Page, expect } from '@playwright/test';
 import { E2E } from '../playwright.config';
 import { createHmac, randomInt } from 'node:crypto';
+import { Client } from 'pg';
 
 export const PORTAL = 'http://127.0.0.1:3000';
 export const ADMIN = 'http://127.0.0.1:3001';
@@ -90,7 +91,8 @@ export async function submitApplicationViaApi(page: Page): Promise<string> {
   return (await createSubmittedApplication(page)).applicationNumber;
 }
 
-export async function createSubmittedApplication(page: Page): Promise<{ id: string; applicationNumber: string }> {
+/** A complete draft (form and documents) ready to submit once it has a fitness certificate. */
+export async function createReadyDraft(page: Page): Promise<{ id: string; chassisNo: string }> {
   const req = page.request;
   const [zones, models] = await Promise.all([
     req.get(`${PORTAL}/api/v1/catalog/zones`).then((r) => r.json()),
@@ -99,12 +101,13 @@ export async function createSubmittedApplication(page: Page): Promise<{ id: stri
   const wards = await req.get(`${PORTAL}/api/v1/catalog/wards?zoneId=${zones[1].id}`).then((r) => r.json());
   const model = models[0].models.find((m: { seatType: string }) => m.seatType === 'FOUR_SEAT');
   const d = await (await req.post(`${PORTAL}/api/v1/applications`, { headers: CSRF })).json();
+  const chassisNo = `CHE${randomInt(1e6, 9e6)}`;
   const form = {
     vehicle: {
       seatType: 'FOUR_SEAT',
       modelId: model.id,
       manufactureYear: 2024,
-      chassisNo: `CHE${randomInt(1e6, 9e6)}`,
+      chassisNo,
       motorNo: `MTE${randomInt(1e6, 9e6)}`,
       batteryType: 'LIFEPO4',
       hasSpeedometer: true,
@@ -122,7 +125,37 @@ export async function createSubmittedApplication(page: Page): Promise<{ id: stri
     });
     expect(r.status()).toBe(201);
   }
-  const s = await req.post(`${PORTAL}/api/v1/applications/${d.id}/submit`, { headers: CSRF });
+  return { id: d.id, chassisNo };
+}
+
+/**
+ * Fixture: a passed, countersigned fitness certificate for the vehicle in the draft, written straight to the
+ * test database. The inspection flow itself is exercised through the UI in workflow.spec.ts.
+ */
+export async function certifyViaDb(applicationId: string): Promise<void> {
+  const c = new Client({ connectionString: E2E.dbOwner });
+  await c.connect();
+  try {
+    const r = await c.query(
+      `INSERT INTO fitness_inspections (id, city_id, application_id, chassis_no, motor_no, seat_type, model_id, status, scheduled_for, location,
+         scheduled_by_staff_id, checklist, inspector_staff_id, inspected_at, countersigned_by_staff_id, countersigned_at, certificate_no, valid_until)
+       SELECT gen_random_uuid(), a.city_id, a.id, a.form_data->'vehicle'->>'chassisNo', a.form_data->'vehicle'->>'motorNo', a.form_data->'vehicle'->>'seatType',
+         (a.form_data->'vehicle'->>'modelId')::uuid, 'PASSED', now(), 'নগর ভবন', gen_random_uuid(),
+         '{"BRAKES":"PASS","LIGHTING":"PASS","HORN":"PASS","SPEED_GOVERNOR":"PASS","CHASSIS_BODY":"PASS","SPEEDOMETER":"PASS"}'::jsonb,
+         gen_random_uuid(), now(), gen_random_uuid(), now(), 'FIT-E2E-' || $2, current_date + 300
+       FROM applications a WHERE a.id = $1::uuid`,
+      [applicationId, `${Date.now()}${randomInt(1000, 9999)}`],
+    );
+    expect(r.rowCount).toBe(1);
+  } finally {
+    await c.end();
+  }
+}
+
+export async function createSubmittedApplication(page: Page): Promise<{ id: string; applicationNumber: string }> {
+  const d = await createReadyDraft(page);
+  await certifyViaDb(d.id);
+  const s = await page.request.post(`${PORTAL}/api/v1/applications/${d.id}/submit`, { headers: CSRF });
   expect(s.status()).toBe(200);
   return { id: d.id, applicationNumber: (await s.json()).applicationNumber };
 }

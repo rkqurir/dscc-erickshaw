@@ -54,6 +54,16 @@ export const errorMessages = {
   APPROVAL_DECISION_MISSING: { bn: 'অনুমোদনের সিদ্ধান্ত রেকর্ড ছাড়া অবস্থা পরিবর্তন করা যাবে না।', en: 'Status cannot change to approved without a recorded decision.' },
   INSPECTION_ALREADY_SCHEDULED: { bn: 'এই আবেদনের একটি পরিদর্শন আগেই নির্ধারিত আছে।', en: 'An inspection is already scheduled for this application.' },
   FITNESS_ALREADY_CERTIFIED: { bn: 'এই গাড়ির বৈধ ফিটনেস সনদ আছে।', en: 'This vehicle already has a valid fitness certificate.' },
+  FITNESS_CERTIFICATE_REQUIRED: {
+    bn: 'আবেদন জমা দেওয়ার আগে ফিটনেস সনদ লাগবে। ফিটনেস পরিদর্শনের আবেদন করুন, ফি দিন এবং সনদ ইস্যু হওয়া পর্যন্ত অপেক্ষা করুন।',
+    en: 'A fitness certificate is required before the application can be submitted. Request a fitness inspection, pay the fee and wait until the certificate is issued.',
+  },
+  FITNESS_VEHICLE_INCOMPLETE: { bn: 'ফিটনেস পরিদর্শনের আবেদনের আগে গাড়ির ধরন, মডেল, চেসিস ও মোটর নম্বর এবং জোন পূরণ করে সংরক্ষণ করুন।', en: 'Fill in and save the seat type, model, chassis and motor numbers and zone before requesting a fitness inspection.' },
+  VEHICLE_LOCKED_FOR_FITNESS: { bn: 'ফিটনেস পরিদর্শন চলমান বা সনদ ইস্যু হওয়ায় চেসিস, মোটর, মডেল ও আসনের ধরন বদলানো যাবে না।', en: 'The chassis, motor, model and seat type cannot change while a fitness inspection is open or a certificate is valid.' },
+  DRAFT_HAS_PAYMENT: { bn: 'এই খসড়ার ফি পরিশোধ করা হয়েছে, তাই এটি মুছে ফেলা যাবে না।', en: 'A fee has been paid for this draft, so it cannot be deleted.' },
+  FITNESS_FEE_UNPAID: { bn: 'ফিটনেস ফি পরিশোধের পরেই পরিদর্শনের সময় দেওয়া যাবে।', en: 'The inspection can be scheduled only after the fitness fee is paid.' },
+  FITNESS_FEE_ALREADY_PAID: { bn: 'ফি পরিশোধিত হওয়ায় এই পরিদর্শনের আবেদন বাতিল করা যাবে না।', en: 'The fee is paid, so this inspection request cannot be withdrawn.' },
+  REFUND_ALREADY_COMPLETED: { bn: 'এই টাকা আগেই ফেরত দেওয়া হয়েছে।', en: 'This refund has already been completed.' },
   INSPECTION_INVALID_STATE: { bn: 'পরিদর্শনের বর্তমান অবস্থায় এই কাজ করা যাবে না।', en: 'This action is not allowed in the inspection’s current status.' },
   FEE_SCHEDULE_MISSING: { bn: 'ফি তালিকা পাওয়া যায়নি। প্রশাসককে জানান।', en: 'Fee schedule not found. Contact the administrator.' },
   INVOICE_ALREADY_PAID: { bn: 'এই ইনভয়েসের ফি আগেই পরিশোধিত।', en: 'This invoice is already paid.' },
@@ -65,7 +75,7 @@ export const errorMessages = {
   APPEAL_INVALID_STATE: { bn: 'আপিলটি আর সিদ্ধান্তের অপেক্ষায় নেই।', en: 'This appeal is no longer pending.' },
   REGISTRATION_ALREADY_ISSUED: { bn: 'এই আবেদনের নম্বর প্লেট আগেই ইস্যু হয়েছে।', en: 'A plate has already been issued for this application.' },
   REGISTRATION_NOT_ACTIVE: { bn: 'নিবন্ধনটি সক্রিয় নয়।', en: 'The registration is not active.' },
-  PLATE_SERIES_EXHAUSTED: { bn: 'এই জোনের প্লেট নম্বর (৯৯৯৯) শেষ। DSCC-এর সিদ্ধান্ত প্রয়োজন।', en: 'This zone’s plate numbers (9999) are used up. DSCC decision needed.' },
+  PLATE_SERIES_EXHAUSTED: { bn: 'এই জোনের প্লেট নম্বর (৯৯৯৯৯৯) শেষ। DSCC-এর সিদ্ধান্ত প্রয়োজন।', en: 'This zone’s plate numbers (999999) are used up. DSCC decision needed.' },
 
   ZONE_PLATE_CODE_TAKEN: { bn: 'এই প্লেট অঞ্চল কোড অন্য জোনে ব্যবহৃত হচ্ছে।', en: 'This plate area code is used by another zone.' },
 } as const;
